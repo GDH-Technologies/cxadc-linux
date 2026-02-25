@@ -41,13 +41,13 @@
 
 #define default_latency			-1
 #define default_audsel			-1
-#define default_vmux		        1	
-#define default_level			16
+#define default_vmux		    1
+#define default_level			8
 #define default_tenbit			0
 #define default_tenxfsc			0
 #define default_sixdb			0
-#define default_crystal			28636363
-#define default_center_offset	8
+#define default_crystal			40000000
+#define default_center_offset	2
 
 #define cx_read(reg)         readl(ctd->mmio + ((reg) >> 2))
 #define cx_write(reg, value) writel((value), ctd->mmio + ((reg) >> 2))
