@@ -1,4 +1,8 @@
 KERNEL=="cxadc*", GROUP="video"
+KERNEL=="cxadc*", SUBSYSTEM=="cxadc", RUN+="/bin/sh -c 'chgrp video /sys$devpath/device/parameters/* && chmod g+rw /sys$devpath/device/parameters/*'"
 
 # Rule for just cxadc0 to select vmux 0
 KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/vmux}="1"
+# KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/level}="8"
+KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/crystal}="40000000"
+KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/center_offset}="2"

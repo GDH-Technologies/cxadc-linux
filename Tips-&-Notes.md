@@ -1,3 +1,5 @@
+# Tips & Notes
+
 ## Other Tips
 
 ### Change CXADC defaults

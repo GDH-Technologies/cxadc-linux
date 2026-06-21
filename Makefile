@@ -2,8 +2,11 @@ CONFIG_MODULE_SIG=n
 KDIR ?= /lib/modules/`uname -r`/build
 CC ?= cc
 CFLAGS ?=-O3 -march=native
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
+INSTALL ?= install
 
-.PHONY: all
+.PHONY: all install uninstall
 all: cxadc leveladj levelmon
 
 # leveladj
@@ -19,6 +22,13 @@ LEVELMON_OBJS = $(LEVELMON_SRCS:.c=.o)
 
 levelmon: $(LEVELMON_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
+
+install: leveladj levelmon
+	$(INSTALL) -d $(DESTDIR)$(BINDIR)
+	$(INSTALL) -m 0755 leveladj levelmon $(DESTDIR)$(BINDIR)/
+
+uninstall:
+	rm -f $(DESTDIR)$(BINDIR)/leveladj $(DESTDIR)$(BINDIR)/levelmon
 
 cxadc:
 	$(MAKE) -C $(KDIR) M=$$PWD
