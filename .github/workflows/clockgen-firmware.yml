@@ -1,0 +1,44 @@
+name: Clockgen Firmware Build
+
+on:
+  push:
+    paths:
+      - clockgen/**
+      - .github/workflows/clockgen-firmware.yml
+  pull_request:
+    paths:
+      - clockgen/**
+      - .github/workflows/clockgen-firmware.yml
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            git \
+            cmake \
+            make \
+            gcc \
+            g++ \
+            gcc-arm-none-eabi
+
+      - name: Build clockgen firmware
+        run: |
+          cd clockgen/scripts/ci
+          bash ./ci-build.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: clockgen-firmware-build
+          path: |
+            clockgen/firmware/build/**/firmware.uf2
+            clockgen/firmware/build/build.log
+            clockgen/firmware/build/build-info.txt

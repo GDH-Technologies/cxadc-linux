@@ -4,7 +4,7 @@
 
 ### Change CXADC defaults
 
-Defaults cxadc3-linux/cxadc.c file to have the defaults you like. at stock, it will look like this:
+Defaults cxadc-linux/cxadc.c file to have the defaults you like. at stock, it will look like this:
 
 `static int latency = -1;` (leave this alone)
 

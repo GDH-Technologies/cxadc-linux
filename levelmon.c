@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -57,13 +58,11 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	// test if the cxadc device is available
-	fd = open(device_path, O_RDWR);
-	if (fd <= 0) {
+	// Check existence without opening in read/write mode, which can block.
+	if (access(device_path, F_OK) != 0) {
 		fprintf(stderr, "%s not found\n", device_path);
 		return -1;
 	}
-	close(fd);
 
 	if (read_cxadc_param("tenbit", device, &tenbit)) {
 		return -1;
@@ -92,21 +91,29 @@ int main(int argc, char *argv[]) {
 	center = max / 2;
 
 	fd = open(device_path, O_RDONLY);
+	if (fd < 0) {
+		fprintf(stderr, "failed to open %s: %s\n", device_path, strerror(errno));
+		free(buf);
+		return -1;
+	}
 
 	while (1) {
 		uint32_t lo_count = 0, clip_lo = 0;
 		uint32_t hi_count = 0, clip_hi = 0;
 		uint64_t lo = 0, hi = 0, average = 0;
 		uint16_t low, high;
+		ssize_t read_bytes;
+		size_t total_samples;
 
 		gettimeofday(&t1, NULL);
-		size_t total_samples = read(fd, buf, readlen);
-		if (total_samples < 0) {
+		read_bytes = read(fd, buf, readlen);
+		if (read_bytes < 0) {
 			printf("failed to read from device %s\n", device);
 			free(buf);
 			close(fd);
 			return -1;
 		}
+		total_samples = (size_t)read_bytes;
 		gettimeofday(&t2, NULL);
 
 		elapsedTime = (t2.tv_sec - t1.tv_sec) * 1000.0;	   // sec to ms

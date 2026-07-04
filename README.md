@@ -28,6 +28,20 @@ Alternative Linux driver for the Conexant CX2388x series video decoder/encoder c
 - [Wiki](https://github.com/happycube/cxadc-linux3/wiki): Card variants, modifications, and cabling
 - [Crystal upgrades](https://github.com/happycube/cxadc-linux3/wiki/Crystal-Upgrades): Higher-frequency replacements
 - [Utils README](utils/README.md): Scripted tools for configuration and monitoring
+- [Clockgen README](clockgen/README.md): Synchronized multi-card clock generator and audio ADC overview
+- [Clockgen BUILDING](clockgen/BUILDING.md): Firmware build and flashing instructions
+
+## Optional Clockgen Integration
+
+This repository also contains the clockgen firmware and helper scripts in clockgen/.
+Use this when you run synchronized multi-card capture rigs and want shared sample clocks plus auxiliary linear audio capture.
+
+- Firmware sources: clockgen/firmware/
+- Capture/diagnostic scripts: clockgen/scripts/
+- Build and flashing guide: [clockgen/BUILDING.md](clockgen/BUILDING.md)
+
+Hardware design and mechanical files are maintained upstream:
+- [GDH-Technologies/cx-clockgen](https://github.com/GDH-Technologies/cx-clockgen)
 
 
 ## Installation
