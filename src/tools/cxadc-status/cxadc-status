@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""cxadc-status - summarise the cxadc driver, cards, parameters and clockgen.
+
+This tool is strictly read-only. It inspects sysfs, procfs and (read-only) ALSA
+mixer state, and never opens /dev/cxadcN, so it is safe to run while a capture
+is in progress and cannot disturb any process using a card.
+
+Rich terminal decoration is used when the optional "rich" package is available;
+otherwise a coloured/plain ASCII fallback is used. Use --json for machine output.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import time
+
+SYS_CLASS = "/sys/class/cxadc"
+CRYSTAL_DEFAULT = 28636363
+CONFLICT_MODULES = ("cx8800", "cx88xx", "cx8802", "cx88_alsa", "cx88_blackbird")
+
+
+# --------------------------------------------------------------------------- #
+# Data collection (read-only)
+# --------------------------------------------------------------------------- #
+def read_text(path):
+    try:
+        with open(path, "r") as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def loaded_modules():
+    mods = {}
+    try:
+        with open("/proc/modules", "r") as fh:
+            for line in fh:
+                parts = line.split()
+                if parts:
+                    mods[parts[0]] = parts
+    except OSError:
+        pass
+    return mods
+
+
+def driver_info():
+    mods = loaded_modules()
+    info = {
+        "loaded": "cxadc" in mods,
+        "version": read_text("/sys/module/cxadc/version"),
+        "srcversion": read_text("/sys/module/cxadc/srcversion"),
+        "conflicts": [m for m in CONFLICT_MODULES if m in mods],
+    }
+    return info
+
+
+def device_in_use(dev_path):
+    """Return a list of (pid, comm) holding dev_path open, via /proc (read-only)."""
+    holders = []
+    try:
+        target = os.stat(dev_path)
+    except OSError:
+        return holders
+    want_rdev = target.st_rdev
+
+    for pid_dir in glob.glob("/proc/[0-9]*"):
+        pid = os.path.basename(pid_dir)
+        fd_dir = os.path.join(pid_dir, "fd")
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue  # process gone or not permitted
+        for fd in fds:
+            fd_path = os.path.join(fd_dir, fd)
+            try:
+                st = os.stat(fd_path)  # follows link to the device
+            except OSError:
+                continue
+            if stat.S_ISCHR(st.st_mode) and st.st_rdev == want_rdev:
+                comm = read_text(os.path.join(pid_dir, "comm")) or "?"
+                holders.append((int(pid), comm))
+                break
+    return holders
+
+
+def effective_rate(params):
+    """Best-effort effective sample rate (Hz) from tenxfsc/crystal/tenbit."""
+    try:
+        tenxfsc = int(params.get("tenxfsc", "0"))
+    except (TypeError, ValueError):
+        return None
+    try:
+        crystal = int(params.get("crystal", str(CRYSTAL_DEFAULT)))
+    except (TypeError, ValueError):
+        crystal = CRYSTAL_DEFAULT
+
+    if tenxfsc == 0:
+        base = crystal
+    elif tenxfsc == 1:
+        base = crystal * 1.25
+    elif tenxfsc < 100:
+        base = tenxfsc * 1_000_000
+    else:
+        base = tenxfsc  # exact Hz
+
+    if params.get("tenbit") == "1":
+        base /= 2
+    return base
+
+
+def card_info(name):
+    base = os.path.join(SYS_CLASS, name)
+    param_dir = os.path.join(base, "device", "parameters")
+    params = {}
+    try:
+        for p in sorted(os.listdir(param_dir)):
+            params[p] = read_text(os.path.join(param_dir, p))
+    except OSError:
+        pass
+
+    dev_path = os.path.join("/dev", name)
+    device_link = os.path.realpath(os.path.join(base, "device"))
+
+    pci = {
+        "slot": os.path.basename(device_link) if device_link else None,
+        "vendor": read_text(os.path.join(base, "device", "vendor")),
+        "device": read_text(os.path.join(base, "device", "device")),
+        "irq": read_text(os.path.join(base, "device", "irq")),
+    }
+
+    return {
+        "name": name,
+        "dev": dev_path,
+        "present": os.path.exists(dev_path),
+        "params": params,
+        "pci": pci,
+        "rate": effective_rate(params),
+        "in_use": device_in_use(dev_path),
+    }
+
+
+def clockgen_info():
+    info = {"present": False, "device": None, "clocks": {}}
+    cards = read_text("/proc/asound/cards") or ""
+    card_id = None
+    for line in cards.splitlines():
+        lb, rb = line.find("["), line.find("]")
+        if lb != -1 and rb > lb:
+            cid = line[lb + 1:rb].strip()
+            if cid.startswith("CXADC"):
+                card_id = cid
+                break
+    if not card_id:
+        return info
+
+    info["present"] = True
+    device = f"hw:CARD={card_id}"
+    info["device"] = device
+
+    if shutil.which("amixer"):
+        for out in (0, 1):
+            ctrl = f"CXADC-Clock {out} Select Playback Source,0"
+            try:
+                res = subprocess.run(
+                    ["amixer", "-D", device, "sget", ctrl],
+                    capture_output=True, text=True, timeout=5, check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            for line in res.stdout.splitlines():
+                if "Item0:" in line:
+                    val = line.split("Item0:")[1].strip().strip("'")
+                    info["clocks"][f"clock{out}"] = val
+    return info
+
+
+def gather():
+    cards = []
+    if os.path.isdir(SYS_CLASS):
+        for path in sorted(glob.glob(os.path.join(SYS_CLASS, "cxadc*"))):
+            cards.append(card_info(os.path.basename(path)))
+    return {
+        "driver": driver_info(),
+        "cards": cards,
+        "clockgen": clockgen_info(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Rendering
+# --------------------------------------------------------------------------- #
+def fmt_rate(hz):
+    if not hz:
+        return "-"
+    return f"{hz / 1_000_000:.3f} MHz"
+
+
+def fmt_holders(holders):
+    if not holders:
+        return "idle"
+    return ", ".join(f"{comm}({pid})" for pid, comm in holders)
+
+
+PARAM_ORDER = [
+    "vmux", "audsel", "sixdb", "level", "center_offset",
+    "tenxfsc", "tenbit", "crystal", "latency",
+]
+
+
+def ordered_params(params):
+    keys = [k for k in PARAM_ORDER if k in params]
+    keys += [k for k in sorted(params) if k not in PARAM_ORDER]
+    return [(k, params[k]) for k in keys]
+
+
+def render_rich(data):
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich import box
+
+    console = Console()
+    drv = data["driver"]
+
+    status = "[green]loaded[/green]" if drv["loaded"] else "[red]not loaded[/red]"
+    lines = [f"Module: {status}"]
+    if drv["version"]:
+        lines.append(f"Version: {drv['version']}")
+    if drv["conflicts"]:
+        lines.append(
+            "[bold red]Conflicting modules loaded:[/bold red] "
+            + ", ".join(drv["conflicts"])
+        )
+    else:
+        lines.append("[green]No conflicting cx88 modules loaded[/green]")
+    console.print(Panel("\n".join(lines), title="CXADC Driver", box=box.ROUNDED))
+
+    if not data["cards"]:
+        console.print("[yellow]No cxadc cards found.[/yellow]")
+    else:
+        overview = Table(title="Cards", box=box.SIMPLE_HEAVY, expand=False)
+        overview.add_column("Card", style="cyan")
+        overview.add_column("Device")
+        overview.add_column("PCI slot")
+        overview.add_column("IRQ")
+        overview.add_column("Rate", justify="right")
+        overview.add_column("In use", style="magenta")
+        for c in data["cards"]:
+            holders = c["in_use"]
+            use = fmt_holders(holders)
+            overview.add_row(
+                c["name"], c["dev"], c["pci"]["slot"] or "-",
+                c["pci"]["irq"] or "-", fmt_rate(c["rate"]),
+                f"[yellow]{use}[/yellow]" if holders else "[green]idle[/green]",
+            )
+        console.print(overview)
+
+        for c in data["cards"]:
+            t = Table(title=f"{c['name']} parameters", box=box.MINIMAL,
+                      show_header=True)
+            t.add_column("Parameter", style="cyan")
+            t.add_column("Value", justify="right")
+            for k, v in ordered_params(c["params"]):
+                t.add_row(k, "-" if v is None else v)
+            console.print(t)
+
+    cg = data["clockgen"]
+    if cg["present"]:
+        cl = [f"ALSA device: {cg['device']}"]
+        if cg["clocks"]:
+            for k in sorted(cg["clocks"]):
+                cl.append(f"{k}: {cg['clocks'][k]}")
+        else:
+            cl.append("(clock selection unavailable; is amixer installed?)")
+        console.print(Panel("\n".join(cl), title="Clock Generator",
+                            box=box.ROUNDED))
+    else:
+        console.print("[dim]No clockgen device detected.[/dim]")
+
+
+# ANSI colour helpers for the fallback renderer.
+def _c(text, code, enabled):
+    return f"\033[{code}m{text}\033[0m" if enabled else text
+
+
+def render_plain(data, color):
+    out = []
+    drv = data["driver"]
+    out.append(_c("== CXADC Driver ==", "1", color))
+    out.append("  Module : " + (
+        _c("loaded", "32", color) if drv["loaded"]
+        else _c("not loaded", "31", color)))
+    if drv["version"]:
+        out.append(f"  Version: {drv['version']}")
+    if drv["conflicts"]:
+        out.append("  " + _c("Conflicting modules: " + ", ".join(drv["conflicts"]),
+                             "31", color))
+    else:
+        out.append("  " + _c("No conflicting cx88 modules loaded", "32", color))
+
+    out.append("")
+    if not data["cards"]:
+        out.append(_c("No cxadc cards found.", "33", color))
+    else:
+        out.append(_c("== Cards ==", "1", color))
+        hdr = f"  {'Card':<8} {'Device':<14} {'PCI slot':<14} {'IRQ':<5} {'Rate':>11}  In use"
+        out.append(hdr)
+        for c in data["cards"]:
+            out.append(
+                f"  {c['name']:<8} {c['dev']:<14} "
+                f"{(c['pci']['slot'] or '-'):<14} {(c['pci']['irq'] or '-'):<5} "
+                f"{fmt_rate(c['rate']):>11}  {fmt_holders(c['in_use'])}"
+            )
+        out.append("")
+        for c in data["cards"]:
+            out.append(_c(f"== {c['name']} parameters ==", "1", color))
+            for k, v in ordered_params(c["params"]):
+                out.append(f"  {k:<16} {('-' if v is None else v)}")
+            out.append("")
+
+    cg = data["clockgen"]
+    out.append(_c("== Clock Generator ==", "1", color))
+    if cg["present"]:
+        out.append(f"  ALSA device: {cg['device']}")
+        if cg["clocks"]:
+            for k in sorted(cg["clocks"]):
+                out.append(f"  {k}: {cg['clocks'][k]}")
+        else:
+            out.append("  (clock selection unavailable; is amixer installed?)")
+    else:
+        out.append("  none detected")
+
+    print("\n".join(out))
+
+
+def render(data, args):
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return
+    use_rich = not args.plain
+    if use_rich:
+        try:
+            render_rich(data)
+            return
+        except ImportError:
+            pass
+    render_plain(data, color=not args.no_color and sys.stdout.isatty())
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Summarise cxadc driver and cards.")
+    ap.add_argument("--json", action="store_true", help="emit JSON")
+    ap.add_argument("--plain", action="store_true",
+                    help="force plain output (no rich)")
+    ap.add_argument("--no-color", action="store_true",
+                    help="disable ANSI colour in plain output")
+    ap.add_argument("--watch", type=float, metavar="SEC", default=0,
+                    help="refresh every SEC seconds")
+    args = ap.parse_args()
+
+    if args.watch > 0 and not args.json:
+        try:
+            while True:
+                os.system("clear")
+                render(gather(), args)
+                time.sleep(args.watch)
+        except KeyboardInterrupt:
+            pass
+    else:
+        render(gather(), args)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,59 @@
+name: Build and Test
+
+on:
+  push:
+    paths:
+      - src/**
+      - config/**
+      - Makefile
+      - dkms.conf
+      - .github/workflows/build.yml
+  pull_request:
+    paths:
+      - src/**
+      - config/**
+      - Makefile
+      - dkms.conf
+      - .github/workflows/build.yml
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential linux-headers-$(uname -r) python3
+
+      - name: Build kernel module
+        run: make module
+
+      - name: Verify repo root stays clean of build artifacts
+        run: |
+          if git status --porcelain --ignored | grep -E '^\!\! (cxadc|.*\.(o|ko|mod|cmd))' | grep -vE '^\!\! (build/|src/kernel/)'; then
+            echo "Unexpected build artifacts outside build/ and src/kernel/"; exit 1
+          fi
+          echo "Root is clean."
+
+      - name: Build userland tools
+        run: make tools
+
+      - name: Syntax-check cxadc-status
+        run: python3 -m py_compile src/tools/cxadc-status/cxadc-status
+
+      - name: Lint cxadc-status (ruff, non-blocking)
+        run: |
+          python3 -m pip install --quiet ruff || exit 0
+          ruff check src/tools/cxadc-status/cxadc-status || true
+
+      - name: Smoke-test cxadc-status (no hardware present)
+        run: |
+          python3 src/tools/cxadc-status/cxadc-status --plain --no-color
+          python3 src/tools/cxadc-status/cxadc-status --json
+
+      - name: Clean
+        run: make clean

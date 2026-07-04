@@ -3,46 +3,79 @@
 Alternative Linux driver for the Conexant CX2388x series video decoder/encoder chips, configured to capture raw 8-bit or 16-bit unsigned samples (28–54 MHz) from video input ports. Enables low-cost ADC use for SDR and similar applications.
 
 > [!WARNING]
+>
 > - **Secure Boot must be disabled** before driver installation
 > - **Do not load both `cxadc` and the regular `cx88` driver simultaneously**
 > - Kernel updates require driver reinstallation unless **DKMS is configured**
-
+>
 > [!NOTE]
+>
 > - Compatible: CX2388x, CX25800
 > - Incompatible: CX23885-xx, CX23888-xx
-> - See the [wiki](https://github.com/happycube/cxadc-linux3/wiki) for hardware variants, modifications, and cabling
+> - See the [upstream reference wiki](https://github.com/happycube/cxadc-linux3/wiki) for hardware variants, modifications, and cabling
 
 ## Hardware Notes
 
 - **CX25800** (White cards): Lowest self-noise; recommended for best results
 - **Stock crystal**: 28.6 MHz (28.636 MSPS); outputs ~14 MHz bandwidth
-- **Upgrades**: `ABLS2-40.000MHZ-D4YF-T` crystal replacement for 40 MHz capability; see [crystal upgrade list](https://github.com/happycube/cxadc-linux3/wiki/Crystal-Upgrades)
+- **Upgrades**: `ABLS2-40.000MHZ-D4YF-T` crystal replacement for 40 MHz capability; see [upstream crystal upgrade list (reference)](https://github.com/happycube/cxadc-linux3/wiki/Crystal-Upgrades)
 - **Cooling**: Important for 40–54 MHz crystals; keep ≤10°C above ambient
 - **MSPS terminology**: When 28 MHz is specified, effective bandwidth is 14 MHz (Nyquist: 2:1 ratio)
 - **System resources**: Lower-end systems (Pentium 4 era) may drop samples; SoX/FLAC encoding in real-time requires adequate resources
 - **PCIe bridge**: Asmedia chips may have issues on older Intel PCH (3rd gen); ITE chips are more reliable
-- **Purchasing**: White CX25800 cards (~16–30 USD) from [AliExpress](https://github.com/happycube/cxadc-linux3/wiki/Hardware-and-Purchasing)
+- **Purchasing**: White CX25800 cards (~16–30 USD) from [upstream hardware/purchasing notes (reference)](https://github.com/happycube/cxadc-linux3/wiki/Hardware-and-Purchasing)
 
 ## Quick Links
 
-- [Wiki](https://github.com/happycube/cxadc-linux3/wiki): Card variants, modifications, and cabling
-- [Crystal upgrades](https://github.com/happycube/cxadc-linux3/wiki/Crystal-Upgrades): Higher-frequency replacements
-- [Utils README](utils/README.md): Scripted tools for configuration and monitoring
+- [Repository](https://github.com/GDH-Technologies/cxadc-linux): Primary source for this project
+- [Upstream Wiki (reference)](https://github.com/happycube/cxadc-linux3/wiki): Card variants, modifications, and cabling
+- [Utils README](src/scripts/README.md): Scripted tools for configuration and monitoring
 - [Clockgen README](clockgen/README.md): Synchronized multi-card clock generator and audio ADC overview
-- [Clockgen BUILDING](clockgen/BUILDING.md): Firmware build and flashing instructions
+- [Clockgen BUILDING](clockgen/BUILD.md): Firmware build and flashing instructions
 
-## Optional Clockgen Integration
+## Primary Workflow Integration
+
+For current GDH capture rigs, CX cards and clockgen devices are primarily used
+through:
+
+- [GDH-Technologies/digitization-toolkit](https://github.com/GDH-Technologies/digitization-toolkit):
+   capture orchestration GUI and operator workflow tooling
+- [GDH-Technologies/capture-node](https://github.com/GDH-Technologies/capture-node):
+   hardware-owning capture service and session lifecycle control
+
+Integration surfaces are configuration-first:
+
+- [`capture-setup.yaml` (digitization-toolkit)](https://github.com/GDH-Technologies/digitization-toolkit/blob/main/capture-setup.yaml)
+- [`capture-node` API/service docs](https://github.com/GDH-Technologies/capture-node/blob/main/README.md)
+
+Standalone driver usage remains supported for direct sysfs/CLI workflows.
+
+## Clockgen Integration
 
 This repository also contains the clockgen firmware and helper scripts in clockgen/.
 Use this when you run synchronized multi-card capture rigs and want shared sample clocks plus auxiliary linear audio capture.
 
 - Firmware sources: clockgen/firmware/
-- Capture/diagnostic scripts: clockgen/scripts/
-- Build and flashing guide: [clockgen/BUILDING.md](clockgen/BUILDING.md)
+- Build and flashing guide: [clockgen/BUILD.md](clockgen/BUILD.md)
 
 Hardware design and mechanical files are maintained upstream:
+
 - [GDH-Technologies/cx-clockgen](https://github.com/GDH-Technologies/cx-clockgen)
 
+## Repository Layout
+
+```
+src/kernel/        kernel module sources (cxadc.c, cx88-reg.h, Kbuild)
+src/tools/common/  shared userland library (sysfs helpers, analyser, clockgen)
+src/tools/leveladj/, levelmon/, cx-capture/, cxadc-status/
+src/scripts/       convenience shell scripts (cxvalues, cxfreq, ...)
+config/            modprobe / udev / systemd files
+clockgen/          clock generator firmware and scripts
+build/             all userland build output (git-ignored)
+```
+
+Kernel build artifacts are produced under `src/kernel/` (git-ignored); the
+resulting `cxadc.ko` is copied to `build/` for convenience.
 
 ## Installation
 
@@ -60,7 +93,7 @@ Install dependencies:
 sudo dnf install -y dkms gcc make kernel-devel-$(uname -r) kernel-headers rsync
 ```
 
-Optional (for capture and monitoring):
+Optional:
 
 ```bash
 sudo dnf install -y ffmpeg sox pv flac
@@ -70,36 +103,40 @@ sudo dnf install -y ffmpeg sox pv flac
 
 This setup automatically rebuilds the driver when the kernel updates.
 
-1. **Clone the repository** (or [download the ZIP](https://github.com/happycube/cxadc-linux3/archive/refs/heads/master.zip)):
+1. **Clone the repository** (or [download the ZIP](https://github.com/GDH-Technologies/cxadc-linux/archive/refs/heads/master.zip)):
 
 ```bash
-git clone https://github.com/happycube/cxadc-linux3 cxadc
-cd cxadc
+git clone https://github.com/GDH-Technologies/cxadc-linux.git cxadc-linux
+cd cxadc-linux
 ```
+
+> [!NOTE]
+> `happycube/cxadc-linux3` links in this document are kept as upstream
+> historical/reference material only.
 
 2. **Copy source to DKMS directory** and register:
 
 ```bash
-sudo dkms remove -m cxadc -v 0.1 --all || true
-sudo rm -rf /usr/src/cxadc-0.1
-sudo mkdir -p /usr/src/cxadc-0.1
-sudo rsync -a --delete --exclude '.git' ./ /usr/src/cxadc-0.1/
+sudo dkms remove -m cxadc -v 0.5 --all || true
+sudo rm -rf /usr/src/cxadc-0.5
+sudo mkdir -p /usr/src/cxadc-0.5
+sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-0.5/
 ```
 
 3. **Build and install** via DKMS:
 
 ```bash
-sudo dkms add -m cxadc -v 0.1
-sudo dkms build -m cxadc -v 0.1
-sudo dkms install -m cxadc -v 0.1
+sudo dkms add -m cxadc -v 0.5
+sudo dkms build -m cxadc -v 0.5
+sudo dkms install -m cxadc -v 0.5
 sudo depmod -a
 ```
 
 4. **Install configuration files**:
 
 ```bash
-sudo cp cxadc.conf /etc/modprobe.d/
-sudo cp cxadc.rules /etc/udev/rules.d/
+sudo cp config/cxadc.conf /etc/modprobe.d/
+sudo cp config/cxadc.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 ```
 
@@ -125,16 +162,16 @@ Success: Device node `/dev/cxadc0` is present.
 When the kernel is updated, DKMS automatically rebuilds the driver at next boot. To manually rebuild:
 
 ```bash
-sudo rsync -a --delete --exclude '.git' ./ /usr/src/cxadc-0.1/
-sudo dkms build -m cxadc -v 0.1
-sudo dkms install -m cxadc -v 0.1 --force
+sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-0.5/
+sudo dkms build -m cxadc -v 0.5
+sudo dkms install -m cxadc -v 0.5 --force
 sudo depmod -a
 ```
 
 ### Remove DKMS Installation
 
 ```bash
-sudo dkms remove -m cxadc -v 0.1 --all
+sudo dkms remove -m cxadc -v 0.5 --all
 ```
 
 ### Alternative Installation (Manual – Not Recommended)
@@ -143,66 +180,14 @@ If you prefer a one-time build without DKMS:
 
 ```bash
 cd cxadc
-make
-sudo make modules_install
-sudo depmod -a
-sudo cp cxadc.conf /etc/modprobe.d/
-sudo cp cxadc.rules /etc/udev/rules.d/
+make                       # builds the kernel module and userland tools
+sudo make install-module   # runs modules_install + depmod
+sudo make install          # installs userland tools + helper scripts
+sudo cp config/cxadc.conf /etc/modprobe.d/
+sudo cp config/cxadc.rules /etc/udev/rules.d/
 ```
 
 **Note:** Manual builds require reinstallation after every kernel update.
-
-### Other Linux Distributions
-
-<details>
-<summary><b>Ubuntu 22.04 & Debian</b></summary>
-
-Install dependencies:
-
-```bash
-sudo apt update
-sudo apt install dkms build-essential linux-headers-$(uname -r) rsync ffmpeg sox pv
-```
-
-For **FLAC 1.5.0+** (required for real-time multi-threaded encoding):
-
-```bash
-sudo apt install -y build-essential cmake libogg-dev
-wget https://github.com/xiph/flac/releases/download/1.5.0/flac-1.5.0.tar.xz
-tar -xf flac-1.5.0.tar.xz
-cd flac-1.5.0
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-sudo make install
-sudo ldconfig
-```
-
-Then follow the **Installation (DKMS)** steps above.
-
-</details>
-
-<details>
-<summary><b>Raspberry Pi OS (Raspberry Pi 4 or 5 with PCIe adapter)</b></summary>
-
-Install dependencies:
-
-```bash
-sudo apt update
-sudo apt install dkms build-essential raspberrypi-kernel-headers rsync ffmpeg sox pv flac
-```
-
-Enable PCIe 32-bit DMA in `/boot/firmware/config.txt`:
-
-```
-[all]
-dtoverlay=pcie-32bit-dma
-```
-
-Then follow the **Installation (DKMS)** steps above.
-
-</details>
-
 
 ## Configuration
 
@@ -231,15 +216,16 @@ echo <value> >/sys/class/cxadc/cxadc0/device/parameters/<param>
 **Persistent configuration:** Edit `/etc/modprobe.d/cxadc.conf` to set parameters at boot, or edit `/etc/udev/rules.d/cxadc.rules` for device-specific settings.
 
 > [!NOTE]
-> Use `cxvalues` (from utils) to display current configuration at any time.
+> Use `cxvalues` (from `src/scripts`) to display current configuration at any time.
 
 ### Input Selection
 
 #### `vmux` (0–3, default: 2) – Physical input port
 
 Selects which video input to capture. Most TV cards have:
+
 - 0: Tuner
-- 1: Composite (RCA/BNC)
+- 1: Composite (BNC)
 - 2: S-Video  
 - 3: Alternative input (varies by card)
 
@@ -257,11 +243,12 @@ for i in 0 1 2 3; do
 done
 ```
 
-See [Card Types Wiki](https://github.com/happycube/cxadc-linux3/wiki/Types-Of-CX2388x-Cards) for optimal connections.
+See [upstream Card Types Wiki (reference)](https://github.com/happycube/cxadc-linux3/wiki/Types-Of-CX2388x-Cards) for optimal connections.
 
 #### `audsel` (0–3, default: none) – Audio multiplexer
 
 For TV cards with external audio selection (e.g., PixelView PlayTV Pro Ultra):
+
 - 0: Tuner TV audio
 - 1: Silence
 - 2: FM stereo tuner
@@ -274,7 +261,7 @@ For TV cards with external audio selection (e.g., PixelView PlayTV Pro Ultra):
 - `1`: Enabled (default; +6 dB gain)
 - `0`: Disabled (cleaner signal; may require external amplifier)
 
-**Use case:** Disable for [raw CVBS](https://github.com/oyvindln/vhs-decode/wiki/CVBS-Composite-Decode) or with external [AD4857](https://github.com/happycube/cxadc-linux3/wiki/Modifications#external-amplification) amplifiers.
+**Use case:** Disable for [raw CVBS](https://github.com/oyvindln/vhs-decode/wiki/CVBS-Composite-Decode) or with external [AD4857 (upstream reference)](https://github.com/happycube/cxadc-linux3/wiki/Modifications#external-amplification) amplifiers.
 
 #### `level` (0–31, default: 16) – Fixed digital gain
 
@@ -283,8 +270,8 @@ Applies fixed gain (0–31) to the input signal. Adjust to minimize clipping.
 Use the `leveladj` tool to auto-adjust:
 
 ```bash
-./leveladj           # For device 0
-./leveladj -d 1      # For device 1
+leveladj           # For device 0
+leveladj -d 1      # For device 1
 ```
 
 #### `center_offset` (0–255, default: 2) – DC offset adjustment
@@ -294,10 +281,11 @@ Manually adjust DC centering of the RF signal.
 **Check centering:** If highest and lowest values are equidistant from 0 and 255, the signal is centered.
 
 ```bash
-./leveladj
+leveladj
 ```
 
 Example output:
+
 ```
 low 121 high 133 clipped 0 nsamp 2097152
 ```
@@ -311,21 +299,24 @@ Analysis: `121 + 133 = 254` ≈ centered.
 Sets the ADC sampling rate based on crystal frequency.
 
 **Stock 28.6 MHz crystal:**
+
 - `0`: 28.6 MHz 8-bit (default)
 - `1`: 35.8 MHz 8-bit (1.25× upsampled)
 - `2`–`99`: Treated as MHz (e.g., `20` = 20 MSPS)
 - Custom: Enter exact frequency (e.g., `14318181`)
 
 **Constraints:**
+
 - Minimum: `(HW crystal / 40) × 14`
 - Maximum: `(HW crystal / 8) × 10`
 
 For 40 MHz crystal:
+
 - Minimum: ~14 MSPS
 - Maximum: ~50 MSPS
 
 > [!TIP]
-> For 40 MHz 8-bit or 20 MHz 16-bit reliable operation, use [crystal replacement](https://github.com/happycube/cxadc-linux3/wiki/Crystal-Upgrades) or [clock gen modification](https://github.com/happycube/cxadc-linux3/wiki/Modifications).
+> For 40 MHz 8-bit or 20 MHz 16-bit reliable operation, use [upstream crystal replacement notes (reference)](https://github.com/happycube/cxadc-linux3/wiki/Crystal-Upgrades) or [upstream clock gen modification notes (reference)](https://github.com/happycube/cxadc-linux3/wiki/Modifications).
 
 #### `tenbit` (0 or 1, default: 0) – Sample bit depth
 
@@ -333,12 +324,14 @@ For 40 MHz crystal:
 - `1`: 16-bit (4× Fsc, filtered VBI data; downsampled 50%)
 
 **Practical rates (stock 28.6 MHz crystal):**
+
 - 8-bit: 28.6 MHz
 - 16-bit: 14.3 MHz
 
 #### `crystal` (default: 28636363) – Physical crystal frequency
 
 Specifies the XTAL crystal frequency in Hz on your CX card. Used only to compute custom `tenxfsc` rates. Common values:
+
 - Stock: 28636363 (28.6 MHz)
 - Upgraded: 40000000 (40 MHz)
 - High-end: 54000000 (54 MHz, requires cooling)
@@ -348,7 +341,6 @@ Specifies the XTAL crystal frequency in Hz on your CX card. Used only to compute
 #### `latency` (0–255, default: 255)
 
 PCI latency timer. Rarely needs adjustment; use default unless experiencing buffer underruns.
-
 
 ## Capture
 
@@ -372,29 +364,47 @@ sudo ffplay -hide_banner -async 1 -f rawvideo -pixel_format gray8 \
   -vf scale=910x525,eq=gamma=0.5:contrast=1.5
 ```
 
+### Status and Diagnostics
+
+`cxadc-status` prints a summary of the driver, every connected card and its
+current sysfs parameters, which process (if any) is using each card, and any
+detected clock generator. It is strictly read-only — it never opens
+`/dev/cxadcN` — so it is safe to run during an active capture.
+
+```bash
+cxadc-status              # rich table summary
+cxadc-status --plain      # ASCII fallback (no rich dependency required)
+cxadc-status --json       # machine-readable output
+cxadc-status --watch 1    # refresh every second
+```
+
+> [!TIP]
+> Rich output uses the optional `rich` Python package if installed; otherwise a
+> plain coloured/ASCII layout is used automatically.
+
 ### Gain Adjustment
 
 #### Automatic Level Adjustment
 
 ```bash
-./leveladj           # Device 0
-./leveladj -d 1      # Device 1, etc.
+leveladj           # Device 0
+leveladj -d 1      # Device 1, etc.
 ```
 
 #### Real-Time Level Monitoring
 
 ```bash
-./levelmon -d cxadc0
+levelmon -d cxadc0
 ```
 
 Output is printed every 0.25 seconds. Example:
 
-```
+```bash
 lo |0| [  3.906%] ( 33.429%) center -0.54% hi ( 65.764%) [ 95.312%] |0|  nsamp 10000000  rate 44.58
    ^    clipped%    neg avg           offset            pos avg    clipped%              MSPS
 ```
 
-For device 1: `./levelmon -d 1`
+For device 1: `levelmon -d 1`
 
 #### Manual Fixed Gain
 
@@ -410,13 +420,51 @@ echo 0 >/sys/class/cxadc/cxadc0/device/parameters/sixdb
 
 ### Raw Data Capture
 
-#### Basic Capture (10 seconds)
+#### cx-capture (recommended)
+
+`cx-capture` wraps device configuration and reading in one command, with optional
+live fan-out to several destinations at once and optional continuous gain/DC
+auto-adjustment. It reads the device with large sequential reads; the file and
+`--stdout` sinks are lossless, while `--tcp`, `--listen` and `--fifo` are
+best-effort monitor sinks that drop data under backpressure so a slow monitor can
+never stall (or overrun) the capture.
+
+```bash
+# Capture 10 seconds to a file
+cx-capture -d cxadc0 -t 10 -o capture.u8
+
+# Capture to a file AND serve a live monitor over TCP (e.g. a waveform viewer)
+cx-capture -d cxadc0 -o capture.u8 --listen 9977
+#   then, elsewhere:  nc localhost 9977 | your-visualiser
+
+# Pipe losslessly into a decoder while also writing a file
+cx-capture -d cxadc0 -o capture.u8 --stdout | your-decoder
+
+# Continuously auto-adjust gain and DC offset during capture (opt-in)
+cx-capture -d cxadc0 -t 30 --auto_adjust -o capture.u8
+
+# Set a clockgen frequency for this capture
+cx-capture -d cxadc0 --clock 40MHz -t 10 -o capture.u8
+```
+
+Run `cx-capture --help` for the full option list (device parameters such as
+`--vmux`, `--level`, `--sixdb`, `--tenbit`, `--center-offset` can be applied
+inline).
+
+> [!NOTE]
+> `--auto_adjust` changes the gain during the capture, which introduces a level
+> step in the recorded stream. It is ideal for live monitoring and CAV
+> LaserDisc captures, but for archival masters prefer a one-time `leveladj`
+> before capture. It is disabled by default.
+
+#### Basic Capture with cat (10 seconds)
 
 ```bash
 timeout 10s cat /dev/cxadc0 | pv > capture.u8
 ```
 
 Options:
+
 - **Duration:** Replace `10s` with `5s`, `1m`, `2h`, etc.
 - **Ctrl+C:** Stop capture manually
 - **pv:** Shows data rate and elapsed time (optional; remove if not installed)
@@ -476,7 +524,6 @@ wait
 > [!NOTE]
 > Each card has a separate set of entries in `/etc/udev/rules.d/cxadc.rules` for persistent settings.
 
-
 ## Troubleshooting
 
 ### Secure Boot Issues
@@ -490,6 +537,7 @@ mokutil --sb-state
 ```
 
 **Disable Secure Boot:**
+
 - Reboot into BIOS/UEFI setup (usually F2, F10, or Del during boot)
 - Find **Secure Boot** setting (usually under "Security" or "Boot")
 - Set to **Disabled**
@@ -508,6 +556,7 @@ mokutil --sb-state
    ```
 
 2. **If DKMS is installed:** Rebuild automatically or manually:
+
    ```bash
    sudo rsync -a --delete --exclude '.git' ./ /usr/src/cxadc-0.1/
    sudo dkms build -m cxadc -v 0.1
@@ -516,6 +565,7 @@ mokutil --sb-state
    ```
 
 3. **If manual installation:** Reinstall the driver:
+
    ```bash
    cd cxadc
    make clean
@@ -531,7 +581,7 @@ mokutil --sb-state
 
 This error appears during `make` or module signing and indicates a kernel/toolchain mismatch:
 
-```
+```bash
 arch/x86/Makefile:142: CONFIG_X86_X32 enabled but no binutils support
   SIGN    /lib/modules/.../extra/cxadc.ko
   DEPMOD  ...
@@ -566,21 +616,25 @@ The warning about `System.map` is non-fatal; the module still loads successfully
 If `/dev/cxadc0` doesn't exist after loading the driver:
 
 1. **Verify the module loaded:**
+
    ```bash
    lsmod | grep cxadc
    ```
 
 2. **Check kernel logs:**
+
    ```bash
    dmesg | grep cxadc
    ```
 
 3. **Verify card is detected:**
+
    ```bash
    lspci | grep -i "cx"
    ```
 
 4. **Reload udev rules:**
+
    ```bash
    sudo udevadm control --reload-rules
    sudo modprobe -r cxadc
@@ -593,16 +647,19 @@ If `/dev/cxadc0` doesn't exist after loading the driver:
 If you see "Permission denied" or cannot read `/dev/cxadc0`:
 
 1. **Add user to `video` group:**
+
    ```bash
    sudo usermod -a -G video $USER
    ```
 
 2. **Log out and back in**, then retry:
+
    ```bash
    cat /dev/cxadc0 | pv | head -c 100K > /dev/null
    ```
 
 3. **Check device permissions:**
+
    ```bash
    ls -l /dev/cxadc*
    # Should show: crw-rw---- root video
@@ -630,7 +687,6 @@ Edit `/etc/udev/rules.d/cxadc.rules` to apply settings per card on plugin. See f
 echo 2 >/sys/class/cxadc/cxadc0/device/parameters/vmux
 echo 16 >/sys/class/cxadc/cxadc0/device/parameters/level
 ```
-
 
 ## History
 
@@ -705,7 +761,7 @@ By [Adam R](https://github.com/AR1972)
 
 ### 2024 – Clockgen Mod & Pi Support
 
-[Clockgen Mod](https://github.com/happycube/cxadc-linux3/wiki/Modifications#clockgen-mod---external-clock) established
+[Clockgen Mod (upstream reference)](https://github.com/happycube/cxadc-linux3/wiki/Modifications#clockgen-mod---external-clock) established
 
 - Software-defined sample rates: 20/28.6/40/50 MSPS modes
 - Shared synchronized clock for multi-card setups

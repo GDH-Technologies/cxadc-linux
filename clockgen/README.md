@@ -58,9 +58,9 @@ This signal will be recorded along side the linear audio, enabling even more aut
 The above shows a 3ch recording as captured from the clock generator, a sine wave on the left, silence on the right, and a head-switch signal on the 3rd channel.
 Read on to get all the details and find out how to build one yourself.
 
-## Building one yourself
+## Build one yourself
 
-The local firmware build and flashing guide is in [BUILDING.md](BUILDING.md).
+The local firmware build and flashing guide is in [BUILD.md](BUILD.md).
 
 This repository includes the firmware and scripts used with the clock generator setup.
 Hardware design files and optional mechanical parts are maintained in the upstream clockgen repository:
@@ -158,7 +158,7 @@ It contains flags that indicate errors, and some other values of interest.
 This object is dumped in the audio data and streamed to the host.
 In other words, to get the debug data, just mute the stream and record a short piece of "audio" with `arecord`.
 
-Have a look at the troubleshooting section of [BUILDING.md](BUILDING.md) and the scripts documentation if you need help getting the system running.
+Have a look at the troubleshooting section of [BUILD.md](BUILD.md) and the scripts documentation if you need help getting the system running.
 
 ## Versioning
 
@@ -194,7 +194,7 @@ The source code is mostly under 3-Clause BSD, but contains external sources with
 Source files carry an [SPDX][spdx] header to indentify.
 For details see the individual *LICENSE\** files in the respective folders they apply to, firmware zip packages contain a copy of all the applicable license files.
 
-[cxadc]: https://github.com/happycube/cxadc-linux3/
+[cxadc]: https://github.com/GDH-Technologies/cxadc-linux/
 [pi-pico]: https://www.raspberrypi.com/products/raspberry-pi-pico/
 [si5351-adafruit]: https://www.adafruit.com/product/2045
 [pcm1802-product]: https://www.ti.com/product/PCM1802

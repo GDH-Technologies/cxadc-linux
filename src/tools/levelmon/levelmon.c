@@ -15,7 +15,6 @@ int main(int argc, char *argv[]) {
 	int fd;
 	char device[64];
 	char device_path[128];
-	char str[512];
 	struct timeval t1, t2;
 	double elapsedTime;
 
@@ -24,16 +23,18 @@ int main(int argc, char *argv[]) {
 	int c;
 
 	opterr = 0;
-	sprintf(device, "cxadc0");
-	sprintf(device_path, "/dev/cxadc0");
+	snprintf(device, sizeof(device), "cxadc0");
+	snprintf(device_path, sizeof(device_path), "/dev/cxadc0");
 
 	while ((c = getopt(argc, argv, "d:bx")) != -1) {
 		switch (c) {
 		case 'd':
-			if (strlen(optarg) <= 30) {
-				sprintf(device_path, "/dev/%s", optarg);
-				sprintf(device, "%s", optarg);
+			if (!cxadc_valid_device_name(optarg)) {
+				fprintf(stderr, "invalid device name: %s\n", optarg);
+				return -1;
 			}
+			snprintf(device, sizeof(device), "%s", optarg);
+			snprintf(device_path, sizeof(device_path), "/dev/%s", optarg);
 			break;
 		case '?':
 			// clang-format off

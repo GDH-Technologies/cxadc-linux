@@ -1,13 +1,27 @@
+# Editors / IDEs
 .idea/
+.vscode/
+.directory
+
+# Userland build output
+/build/
+
+# Kernel module build artifacts (built in place under src/kernel/)
 *.cmd
+.*.cmd
 *.o
+*.o.*
 *.ko
 *.mod
 *.mod.c
-modules.order
+*.mod.o
+*.symvers
+*.order
 Module.symvers
+modules.order
 built-in.a
-.vscode/
-.directory
-leveladj
-levelmon
+.tmp_versions/
+
+# Python
+__pycache__/
+*.pyc

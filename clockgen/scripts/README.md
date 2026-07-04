@@ -37,8 +37,8 @@ Even though convenient, review the script content before running this:
 
 ```bash
 # if you have curl installed
-curl https://raw.githubusercontent.com/happycube/cxadc-linux3/master/clockgen/scripts/collect-info.sh | bash
+curl https://raw.githubusercontent.com/GDH-Technologies/cxadc-linux/main/clockgen/scripts/collect-info.sh | bash
 # if you have wget installed
-wget -O - https://raw.githubusercontent.com/happycube/cxadc-linux3/master/clockgen/scripts/collect-info.sh | bash
+wget -O - https://raw.githubusercontent.com/GDH-Technologies/cxadc-linux/main/clockgen/scripts/collect-info.sh | bash
 ```
  

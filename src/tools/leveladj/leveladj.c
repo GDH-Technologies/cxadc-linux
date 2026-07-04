@@ -1,31 +1,41 @@
-#include <sys/ioctl.h>
-#include <getopt.h>
-#include <stdlib.h>
+/*
+ * leveladj - auto-adjust the cxadc fixed gain ("level") for a good signal range.
+ *
+ * Historically this scanned the level linearly with a 65 MiB static buffer. It
+ * now uses the shared single-pass histogram analyser (see cx_analyze) over a
+ * modest heap buffer and converges on the highest non-clipping level. The
+ * command-line interface and printed output columns are unchanged.
+ */
+
 #include "utils.h"
+#include "cx_analyze.h"
 
-// this needs to be one over the ring buffer size to work
-#define bufsize (1024*1024*65)
-unsigned char buf[bufsize];
+#include <errno.h>
+#include <fcntl.h>
+#include <getopt.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
-int readlen = 2048 * 1024;
+#define READ_LEN (2 * 1024 * 1024)
+#define MAX_ITERS 48
 
 int main(int argc, char *argv[])
 {
-	int ret = 0;
 	int fd;
-	int level = 20;
-	int go_on = 1; // 2 after going over
+	int level;
 	char device[64];
 	char device_path[128];
 
-	int tenbit  = -1;
+	int tenbit = -1;
 	int tenxfsc = -1;
-
 	int c;
 
 	opterr = 0;
-	sprintf(device, "cxadc0");
-	sprintf(device_path, "/dev/cxadc0");
+	snprintf(device, sizeof(device), "cxadc0");
+	snprintf(device_path, sizeof(device_path), "/dev/cxadc0");
 
 	while ((c = getopt(argc, argv, "d:bx")) != -1) {
 		switch (c) {
@@ -36,126 +46,112 @@ int main(int argc, char *argv[])
 			tenxfsc = 1;
 			break;
 		case 'd':
-			if (strlen(optarg) <= 30) {
-				sprintf(device_path, "/dev/%s", optarg);
-				sprintf(device, "%s", optarg);
+			if (!cxadc_valid_device_name(optarg)) {
+				fprintf(stderr, "invalid device name: %s\n", optarg);
+				return -1;
 			}
+			snprintf(device, sizeof(device), "%s", optarg);
+			snprintf(device_path, sizeof(device_path), "/dev/%s", optarg);
 			break;
-		};
+		}
 	}
 
-	// test if the cxadc device is available
-	fd = open(device_path, O_RDWR);
-	if (fd <= 0) {
+	/* Check the device exists without opening it (open can disturb capture). */
+	if (access(device_path, F_OK) != 0) {
 		fprintf(stderr, "%s not found\n", device_path);
 		return -1;
 	}
-	close(fd);
-    
-	// set tenbit if supplied in args
-	if (tenbit >= 0) {
-		if (set_cxadc_param("tenbit", device, tenbit)) {
-			return -1;
-		}
-	}
 
-	// read tenbit
-    if (read_cxadc_param("tenbit", device, &tenbit)) {
+	if (tenbit >= 0 && set_cxadc_param("tenbit", device, tenbit))
 		return -1;
-	}
-
-	// set tenxfsc if supplied in args
-	if (tenxfsc >= 0) {
-		if (set_cxadc_param("tenxfsc", device, tenxfsc)) {
-			return -1;
-		}
-	}
-
-	// read tenxfsc
-    if (read_cxadc_param("tenxfsc", device, &tenxfsc)) {
+	if (read_cxadc_param("tenbit", device, &tenbit))
 		return -1;
-	}
 
+	if (tenxfsc >= 0 && set_cxadc_param("tenxfsc", device, tenxfsc))
+		return -1;
+	if (read_cxadc_param("tenxfsc", device, &tenxfsc))
+		return -1;
+
+	/* Positional argument: set a fixed level and exit (unchanged behaviour). */
 	if (argc > optind) {
 		level = atoi(argv[optind]);
-
-		if (set_cxadc_param("level", device, level)) {
+		if (set_cxadc_param("level", device, level))
 			return -1;
-		}
-
 		return 0;
 	}
 
-	while (go_on) {
-		int over = 0;
-		unsigned int low = tenbit ? 65535 : 255, high = 0;
+	uint8_t *buf = malloc(READ_LEN);
+	if (buf == NULL) {
+		fprintf(stderr, "failed to allocate %d bytes\n", READ_LEN);
+		return -1;
+	}
+
+	/* Start from the current level if readable, otherwise the historic default. */
+	if (read_cxadc_param("level", device, &level) || level < 0 || level > 31)
+		level = 20;
+
+	int best_safe = -1;   /* highest level observed with no clipping */
+	int visited[32] = {0};
+	int ret = 0;
+
+	for (int iter = 0; iter < MAX_ITERS; iter++) {
+		cx_stats st;
+		ssize_t got;
 
 		if (set_cxadc_param("level", device, level)) {
-			return -1;
+			ret = -1;
+			break;
 		}
 
-		fd = open(device_path, O_RDWR);
+		fd = open(device_path, O_RDONLY);
+		if (fd < 0) {
+			fprintf(stderr, "failed to open %s: %s\n", device_path,
+				strerror(errno));
+			ret = -1;
+			break;
+		}
 
 		printf("testing level %d\n", level);
 
-		// read a bit
-		if (read(fd, buf, readlen) < 0) {
-			printf("failed to read from device %s\n", device);
-			close(fd);
-			return -1;
-		}
-
-		if (tenbit) {
-			unsigned short *wbuf = (void *)buf;
-
-			for (int i = 0; i < (readlen / 2) && (over < (readlen / 200000)); i++) {
-				if (wbuf[i] < low)
-					low = wbuf[i];
-				if (wbuf[i] > high)
-					high = wbuf[i];
-
-				if ((wbuf[i] < 0x0800) || (wbuf[i] > 0xf800))
-					over++;
-
-				// auto fail on 0 and 65535
-				if ((wbuf[i] == 0) || (wbuf[i] == 0xffff))
-					over += (readlen / 50000);
-			}
-		} else {
-			for (int i = 0; i < readlen && (over < (readlen / 100000)); i++) {
-				if (buf[i] < low)
-					low = buf[i];
-				if (buf[i] > high)
-					high = buf[i];
-
-				if ((buf[i] < 0x08) || (buf[i] > 0xf8))
-					over++;
-
-				// auto fail on 0 and 255
-				if ((buf[i] == 0) || (buf[i] == 0xff))
-					over += (readlen / 50000);
-			}
-		}
-
-		printf("low %d high %d clipped %d nsamp %d\n", (int)low, (int)high, over, readlen);
-
-		if (over >= 20) {
-			go_on = 2;
-		} else {
-			if (go_on == 2)
-				go_on = 0;
-		}
-
-		if (go_on == 1)
-			level++;
-		else if (go_on == 2)
-			level--;
-
-		if ((level < 0) || (level > 31))
-			go_on = 0;
+		got = read(fd, buf, READ_LEN);
 		close(fd);
+		if (got < 0) {
+			printf("failed to read from device %s\n", device);
+			ret = -1;
+			break;
+		}
+
+		if (cx_analyze(buf, (size_t)got, tenbit, 0.0, &st)) {
+			fprintf(stderr, "no samples read from %s\n", device);
+			ret = -1;
+			break;
+		}
+
+		printf("low %d high %d clipped %d nsamp %d\n", (int)st.min,
+		       (int)st.max, (int)(st.clip_low + st.clip_high),
+		       (int)st.nsamp);
+
+		int clipping = (st.clip_fraction > 0.001) || (st.utilization >= 1.0);
+		if (!clipping && level > best_safe)
+			best_safe = level;
+
+		visited[level] = 1;
+
+		int next = cx_suggest_level(&st, level, 0.0);
+		if (next == level)
+			break; /* converged */
+		if (visited[next]) {
+			/* Oscillating between two levels: settle on the safe one. */
+			break;
+		}
+		level = next;
 	}
 
-	return 0;
+	/* Ensure we leave the card at the highest known non-clipping level. */
+	if (ret == 0 && best_safe >= 0 && best_safe != level)
+		ret = set_cxadc_param("level", device, best_safe);
+
+	free(buf);
+	return ret;
 }
 
