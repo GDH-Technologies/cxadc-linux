@@ -4,7 +4,17 @@
 # Copyright (c) 2023 Rene Wolf
 
 # the alsa device we expect the clock gen to be
-alsadevice="${CLOCK_GEN_ALSA_DEVICE:-hw:CARD=CXADCADCClockGe}"
+alsadevice="${CLOCK_GEN_ALSA_DEVICE:-}"
+clockgen_alias="${CLOCK_GEN_ALSA_ALIAS_DEFAULT:-vcr0-clockgen-audio}"
+clockgen_fallback="${CLOCK_GEN_ALSA_DEVICE_FALLBACK:-hw:CARD=CXADCADCClockGe}"
+
+if [[ -z "$alsadevice" ]] ; then
+	if command -v arecord > /dev/null 2>&1 && arecord -L | grep -Fxq "$clockgen_alias" ; then
+		alsadevice="$clockgen_alias"
+	else
+		alsadevice="$clockgen_fallback"
+	fi
+fi
 
 tmp="$(mktemp -d /var/tmp/cx-clockgen-info.XXXXXX)"
 
