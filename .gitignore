@@ -5,6 +5,10 @@
 
 # Userland build output
 /build/
+/leveladj
+/levelmon
+
+/.github/workflows/logs
 
 # Kernel module build artifacts (built in place under src/kernel/)
 *.cmd

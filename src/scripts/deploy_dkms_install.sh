@@ -15,6 +15,9 @@ fi
 
 cd "${repo_dir}"
 
+install_bin="/usr/local/bin"
+build_bin="${repo_dir}/build/bin"
+
 dkms_name="$(awk -F= '/^PACKAGE_NAME=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
 dkms_version="$(awk -F= '/^PACKAGE_VERSION=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
 
@@ -34,8 +37,25 @@ if [[ -z "${depmod_bin}" ]]; then
   exit 1
 fi
 
-echo "Installing userspace tools/scripts..."
-make -C "${repo_dir}" install
+echo "Installing userspace tools/scripts from prebuilt artifacts..."
+for tool in leveladj levelmon cx-capture; do
+  if [[ ! -x "${build_bin}/${tool}" ]]; then
+    echo "ERROR: missing prebuilt tool ${build_bin}/${tool}" >&2
+    echo "Run 'make clean && make' as non-root before invoking this helper." >&2
+    exit 1
+  fi
+done
+
+install -d "${install_bin}"
+install -m 0755 "${build_bin}/leveladj" "${install_bin}/leveladj"
+install -m 0755 "${build_bin}/levelmon" "${install_bin}/levelmon"
+install -m 0755 "${build_bin}/cx-capture" "${install_bin}/cx-capture"
+install -m 0755 "${repo_dir}/src/tools/cxadc-status/cxadc-status" "${install_bin}/cxadc-status"
+
+for script in "${repo_dir}/src/scripts"/cx*; do
+  [[ -f "${script}" ]] || continue
+  install -m 0755 "${script}" "${install_bin}/$(basename "${script}")"
+done
 
 echo "Installing kernel module via DKMS ${dkms_name}/${dkms_version}..."
 "${dkms_bin}" remove -m "${dkms_name}" -v "${dkms_version}" --all || true
