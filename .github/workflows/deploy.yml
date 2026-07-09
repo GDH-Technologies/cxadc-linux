@@ -47,7 +47,7 @@ jobs:
         shell: bash
         env:
           REPO_DIR: /home/rdodge/Repos/cxadc-linux
-          BRANCH: main
+          BRANCH: master
           FORCE_REINSTALL: ${{ inputs.force_reinstall }}
           RELOAD_MODULE: ${{ inputs.reload_module }}
         run: |
