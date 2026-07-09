@@ -3,7 +3,7 @@
 A project to synchronously clock two (or more) [CXADC][cxadc] PCIe cards and an extra audio ADC from an external clock generator, for [VHS-Decode][vhs-decode] setups.
 This enables sync capturing of the two RF streams (RF Video and RF HiFi audio from a VHS), in addition to a stereo audio stream (linear VHS audio).
 
-![mainboard-assembled.jpg](mainboard-assembled.jpg)
+![mainboard-assembled.png](mainboard-assembled.png)
 
 The above picture shows the mainboard, which you would typically mount inside your capture PC, along side the 2 CXADC cards.
 The below diagram shows how a typical VHS capture is setup using the clock generator + audio ADC (this project).

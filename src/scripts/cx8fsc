@@ -1,3 +1,15 @@
 #!/bin/bash
-echo 0 > /sys/class/cxadc/cxadc$1/device/parameters/tenxfsc
+set -euo pipefail
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+resolve_device() {
+	if command -v cxresolve >/dev/null 2>&1; then
+		cxresolve "$1"
+	else
+		bash "$script_dir/cxresolve" "$1"
+	fi
+}
+
+device_name="$(resolve_device "${1:-0}")"
+echo 0 > "/sys/class/cxadc/${device_name}/device/parameters/tenxfsc"
 cxvalues

@@ -1,10 +1,192 @@
 #include "utils.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <sys/types.h>
 
 #define SYSFS_PARAM_FMT "/sys/class/cxadc/%s/device/parameters/%s"
+
+static int all_digits(const char *s)
+{
+	if (s == NULL || *s == '\0')
+		return 0;
+
+	for (const char *p = s; *p; p++) {
+		if (!isdigit((unsigned char)*p))
+			return 0;
+	}
+	return 1;
+}
+
+static int copy_string(char *dst, size_t dst_len, const char *src)
+{
+	if (dst == NULL || src == NULL || dst_len == 0)
+		return -1;
+
+	if (snprintf(dst, dst_len, "%s", src) >= (int)dst_len)
+		return -1;
+
+	return 0;
+}
+
+static int read_device_numbers(const char *path, unsigned int *maj, unsigned int *min)
+{
+	FILE *f = fopen(path, "r");
+	if (f == NULL)
+		return -1;
+
+	unsigned int major_num = 0;
+	unsigned int minor_num = 0;
+	int ok = fscanf(f, "%u:%u", &major_num, &minor_num);
+	fclose(f);
+	if (ok != 2)
+		return -1;
+
+	*maj = major_num;
+	*min = minor_num;
+	return 0;
+}
+
+static int find_cxadc_name_by_rdev(dev_t rdev, char *canonical, size_t canonical_len)
+{
+	DIR *dir = opendir("/sys/class/cxadc");
+	if (dir == NULL)
+		return -1;
+
+	unsigned int dev_major = major(rdev);
+	unsigned int dev_minor = minor(rdev);
+	int found = -1;
+
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL) {
+		if (entry->d_name[0] == '.')
+			continue;
+
+		char dev_path[PATH_MAX];
+		if (snprintf(dev_path, sizeof(dev_path), "/sys/class/cxadc/%s/dev",
+			    entry->d_name) >= (int)sizeof(dev_path)) {
+			continue;
+		}
+
+		unsigned int maj = 0;
+		unsigned int min = 0;
+		if (read_device_numbers(dev_path, &maj, &min) != 0)
+			continue;
+
+		if (maj == dev_major && min == dev_minor) {
+			if (copy_string(canonical, canonical_len, entry->d_name) == 0)
+				found = 0;
+			break;
+		}
+	}
+
+	closedir(dir);
+	return found;
+}
+
+static int try_candidate(const char *candidate,
+	char *canonical_device,
+	size_t canonical_device_len,
+	char *device_path,
+	size_t device_path_len)
+{
+	struct stat st;
+	if (stat(candidate, &st) != 0)
+		return -1;
+
+	if (!S_ISCHR(st.st_mode))
+		return -1;
+
+	char resolved[PATH_MAX];
+	const char *final_path = candidate;
+	if (realpath(candidate, resolved) != NULL)
+		final_path = resolved;
+
+	if (find_cxadc_name_by_rdev(st.st_rdev, canonical_device,
+	    canonical_device_len) != 0) {
+		return -1;
+	}
+
+	return copy_string(device_path, device_path_len, final_path);
+}
+
+int cxadc_resolve_device(
+	const char *input,
+	char *canonical_device,
+	size_t canonical_device_len,
+	char *device_path,
+	size_t device_path_len)
+{
+	if (input == NULL || *input == '\0') {
+		fprintf(stderr, "device input must not be empty\n");
+		return -1;
+	}
+
+	char candidate[PATH_MAX];
+
+	/* Numeric shorthand: 0 -> /dev/cxadc0 */
+	if (all_digits(input)) {
+		if (snprintf(candidate, sizeof(candidate), "/dev/cxadc%s", input) <
+		    (int)sizeof(candidate) &&
+		    try_candidate(candidate, canonical_device, canonical_device_len,
+			device_path, device_path_len) == 0) {
+			return 0;
+		}
+	}
+
+	/* Absolute device path, e.g. /dev/cxadc0 or /dev/cx/vcr0-video */
+	if (strncmp(input, "/dev/", 5) == 0 &&
+	    try_candidate(input, canonical_device, canonical_device_len,
+		device_path, device_path_len) == 0) {
+		return 0;
+	}
+
+	/* Direct class device name, e.g. cxadc0 */
+	if (cxadc_valid_device_name(input) &&
+	    snprintf(candidate, sizeof(candidate), "/dev/%s", input) <
+		(int)sizeof(candidate) &&
+	    try_candidate(candidate, canonical_device, canonical_device_len,
+		device_path, device_path_len) == 0) {
+		return 0;
+	}
+
+	/* Relative /dev fragment, e.g. cx/vcr0-video */
+	if (input[0] != '/' && strchr(input, '/') != NULL &&
+	    snprintf(candidate, sizeof(candidate), "/dev/%s", input) <
+		(int)sizeof(candidate) &&
+	    try_candidate(candidate, canonical_device, canonical_device_len,
+		device_path, device_path_len) == 0) {
+		return 0;
+	}
+
+	/* Bare alias under /dev/cx, e.g. vcr0-video */
+	if (input[0] != '/' && strchr(input, '/') == NULL &&
+	    snprintf(candidate, sizeof(candidate), "/dev/cx/%s", input) <
+		(int)sizeof(candidate) &&
+	    try_candidate(candidate, canonical_device, canonical_device_len,
+		device_path, device_path_len) == 0) {
+		return 0;
+	}
+
+	/* Last-chance relative /dev lookup for names outside /dev/cx. */
+	if (input[0] != '/' && strchr(input, '/') == NULL &&
+	    snprintf(candidate, sizeof(candidate), "/dev/%s", input) <
+		(int)sizeof(candidate) &&
+	    try_candidate(candidate, canonical_device, canonical_device_len,
+		device_path, device_path_len) == 0) {
+		return 0;
+	}
+
+	fprintf(stderr,
+		"failed to resolve '%s' as a cxadc device (expected cxadcN, N, /dev/*, or bare alias under /dev/cx)\n",
+		input);
+	return -1;
+}
 
 int cxadc_valid_device_name(const char *device)
 {

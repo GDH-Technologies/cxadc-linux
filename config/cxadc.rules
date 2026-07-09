@@ -1,8 +1,20 @@
-KERNEL=="cxadc*", GROUP="video"
-KERNEL=="cxadc*", SUBSYSTEM=="cxadc", RUN+="/bin/sh -c 'chgrp video /sys$devpath/device/parameters/* && chmod g+rw /sys$devpath/device/parameters/*'"
+# Default permissions (single-file policy): video group owns /dev/cxadc*
+# and can edit sysfs parameters without sudo.
+# Host-specific alias symlinks (for example /dev/cx/vcr0-video) should be
+# defined in separate udev rules; these permission rules still apply because
+# aliases resolve back to the underlying cxadc* character nodes.
+KERNEL=="cxadc*", SUBSYSTEM=="cxadc", MODE="0660", GROUP="video"
+SUBSYSTEM=="cxadc", KERNEL=="cxadc*", ACTION=="add|change", \
+	RUN+="/usr/bin/chgrp -R video /sys/class/cxadc/%k/device/parameters", \
+	RUN+="/usr/bin/chmod -R g+w /sys/class/cxadc/%k/device/parameters"
 
-# Rule for just cxadc0 to select vmux 0
-KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/vmux}="1"
-# KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/level}="8"
-KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/crystal}="40000000"
-KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/center_offset}="2"
+# Optional dedicated group alternative (uncomment these and comment the
+# two rules above if you prefer a cxadc-specific group):
+# KERNEL=="cxadc*", SUBSYSTEM=="cxadc", MODE="0660", GROUP="cxadc"
+# SUBSYSTEM=="cxadc", KERNEL=="cxadc*", ACTION=="add|change", \
+#   RUN+="/usr/bin/chgrp -R cxadc /sys/class/cxadc/%k/device/parameters", \
+#   RUN+="/usr/bin/chmod -R g+w /sys/class/cxadc/%k/device/parameters"
+
+# Rule for each CX card to select vmux 0
+KERNEL=="cxadc*", SUBSYSTEM=="cxadc", ATTR{device/parameters/vmux}="1"
+KERNEL=="cxadc*", SUBSYSTEM=="cxadc", ATTR{device/parameters/crystal}="40000000"

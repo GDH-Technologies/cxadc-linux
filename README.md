@@ -99,81 +99,6 @@ Optional:
 sudo dnf install -y ffmpeg sox pv flac
 ```
 
-### Installation (Fedora with DKMS – Recommended)
-
-This setup automatically rebuilds the driver when the kernel updates.
-
-1. **Clone the repository** (or [download the ZIP](https://github.com/GDH-Technologies/cxadc-linux/archive/refs/heads/master.zip)):
-
-```bash
-git clone https://github.com/GDH-Technologies/cxadc-linux.git cxadc-linux
-cd cxadc-linux
-```
-
-> [!NOTE]
-> `happycube/cxadc-linux3` links in this document are kept as upstream
-> historical/reference material only.
-
-2. **Copy source to DKMS directory** and register:
-
-```bash
-sudo dkms remove -m cxadc -v 0.5 --all || true
-sudo rm -rf /usr/src/cxadc-0.5
-sudo mkdir -p /usr/src/cxadc-0.5
-sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-0.5/
-```
-
-3. **Build and install** via DKMS:
-
-```bash
-sudo dkms add -m cxadc -v 0.5
-sudo dkms build -m cxadc -v 0.5
-sudo dkms install -m cxadc -v 0.5
-sudo depmod -a
-```
-
-4. **Install configuration files**:
-
-```bash
-sudo cp config/cxadc.conf /etc/modprobe.d/
-sudo cp config/cxadc.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules
-```
-
-5. **Load driver and verify**:
-
-```bash
-sudo modprobe -r cx88_alsa cx8800 cx88xx cx8802 cx88_blackbird cx2341x || true
-sudo modprobe cxadc
-```
-
-Verify installation:
-
-```bash
-dkms status | grep cxadc
-lsmod | grep cxadc
-ls -l /dev/cxadc*
-```
-
-Success: Device node `/dev/cxadc0` is present.
-
-### After Kernel Updates (DKMS)
-
-When the kernel is updated, DKMS automatically rebuilds the driver at next boot. To manually rebuild:
-
-```bash
-sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-0.5/
-sudo dkms build -m cxadc -v 0.5
-sudo dkms install -m cxadc -v 0.5 --force
-sudo depmod -a
-```
-
-### Remove DKMS Installation
-
-```bash
-sudo dkms remove -m cxadc -v 0.5 --all
-```
-
 ### Alternative Installation (Manual – Not Recommended)
 
 If you prefer a one-time build without DKMS:
@@ -201,6 +126,21 @@ sudo usermod -a -G video $USER
 
 Log out and back in for the change to take effect.
 
+If you prefer a dedicated `cxadc` group instead, use the commented
+alternative rules in `/etc/udev/rules.d/cxadc.rules`, then:
+
+```bash
+sudo groupadd -f cxadc
+sudo usermod -a -G cxadc $USER
+```
+
+After changing udev rules, reload and trigger:
+
+```bash
+sudo udevadm control --reload-rules
+sudo udevadm trigger -c add -s cxadc
+```
+
 ### Module Parameters
 
 Module parameters control driver behavior. Most can be changed at runtime via `sysfs` without reloading the driver.
@@ -217,6 +157,20 @@ echo <value> >/sys/class/cxadc/cxadc0/device/parameters/<param>
 
 > [!NOTE]
 > Use `cxvalues` (from `src/scripts`) to display current configuration at any time.
+
+### Device Input Forms (tools and scripts)
+
+Most cxadc userland tools and helper scripts now accept all of the following
+device inputs:
+
+- canonical class names: `cxadc0`, `cxadc1`, ...
+- numeric shorthand: `0`, `1`, ...
+- absolute device nodes: `/dev/cxadc0`
+- absolute aliases: `/dev/cx/vcr0-video`
+- bare aliases discovered under `/dev/cx`: `vcr0-video`
+
+Inputs are resolved back to the canonical class device (`cxadcN`) before sysfs
+parameter writes. Use `cxresolve` to inspect how an input resolves.
 
 ### Input Selection
 
@@ -271,7 +225,8 @@ Use the `leveladj` tool to auto-adjust:
 
 ```bash
 leveladj           # For device 0
-leveladj -d 1      # For device 1
+leveladj -d cxadc1 # For device 1
+leveladj -d vcr0-video
 ```
 
 #### `center_offset` (0–255, default: 2) – DC offset adjustment
@@ -388,7 +343,8 @@ cxadc-status --watch 1    # refresh every second
 
 ```bash
 leveladj           # Device 0
-leveladj -d 1      # Device 1, etc.
+leveladj -d cxadc1 # Device 1, etc.
+leveladj -d /dev/cx/vcr0-video
 ```
 
 #### Real-Time Level Monitoring
@@ -404,7 +360,8 @@ lo |0| [  3.906%] ( 33.429%) center -0.54% hi ( 65.764%) [ 95.312%] |0|  nsamp 1
    ^    clipped%    neg avg           offset            pos avg    clipped%              MSPS
 ```
 
-For device 1: `levelmon -d 1`
+For device 1: `levelmon -d cxadc1`
+For aliases: `levelmon -d vcr0-video`
 
 #### Manual Fixed Gain
 
@@ -432,6 +389,10 @@ never stall (or overrun) the capture.
 ```bash
 # Capture 10 seconds to a file
 cx-capture -d cxadc0 -t 10 -o capture.u8
+
+# Same capture via alias path or bare alias
+cx-capture -d /dev/cx/vcr0-video -t 10 -o capture.u8
+cx-capture -d vcr0-video -t 10 -o capture.u8
 
 # Capture to a file AND serve a live monitor over TCP (e.g. a waveform viewer)
 cx-capture -d cxadc0 -o capture.u8 --listen 9977
@@ -508,7 +469,8 @@ cat /dev/cxadc0 | flac --threads=64 -6 \
 
 ### Multi-Card Capture
 
-For multiple cards, use `/dev/cxadc0`, `/dev/cxadc1`, etc., and adjust parameters per card:
+For multiple cards, use `/dev/cxadc0`, `/dev/cxadc1`, etc., or host-defined
+aliases under `/dev/cx`, and adjust parameters per card:
 
 ```bash
 # Configure card 1

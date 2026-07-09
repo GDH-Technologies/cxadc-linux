@@ -1,2 +1,33 @@
 #!/bin/bash
-ls /dev |grep cxadc |sed -e's/dev//g'|xargs -I % bash -c 'find /sys/class/cxadc/%/device/parameters|grep -v parameters$'|xargs -I % bash -c 'echo -n "% "  && cat %'
+set -euo pipefail
+
+shopt -s nullglob
+
+# Build an optional alias map from /dev/cx/* -> cxadcN.
+declare -A alias_map
+if [[ -d /dev/cx ]]; then
+	for alias in /dev/cx/*; do
+		[[ -e "$alias" ]] || continue
+		target="$(readlink -f -- "$alias" 2>/dev/null || true)"
+		[[ -n "$target" ]] || continue
+		base="$(basename -- "$target")"
+		if [[ "$base" =~ ^cxadc[0-9]+$ ]]; then
+			alias_map["$base"]+=" $alias"
+		fi
+	done
+fi
+
+for devdir in /sys/class/cxadc/cxadc*; do
+	[[ -d "$devdir" ]] || continue
+	devname="$(basename -- "$devdir")"
+
+	if [[ -n "${alias_map[$devname]:-}" ]]; then
+		echo "# aliases for ${devname}:${alias_map[$devname]}"
+	fi
+
+	for param in "$devdir"/device/parameters/*; do
+		[[ -f "$param" ]] || continue
+		echo -n "$param "
+		cat "$param"
+	done
+done

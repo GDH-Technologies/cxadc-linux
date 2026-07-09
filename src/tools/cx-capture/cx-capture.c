@@ -285,7 +285,7 @@ static void usage(const char *prog)
 		"Capture the raw ADC stream from a cxadc device.\n"
 		"\n"
 		"Device / capture:\n"
-		"  -d, --device NAME     cxadc device (default: cxadc0)\n"
+		"  -d, --device INPUT    cxadc input (name/index/path/alias; default: cxadc0)\n"
 		"  -f, --frequency N     set sampling rate (tenxfsc): 0/1, MHz, or Hz\n"
 		"  -t, --duration SEC    capture for SEC seconds (default: until Ctrl-C)\n"
 		"      --clock LABEL     set clockgen frequency (20MHz|28.63MHz|40MHz|50MHz)\n"
@@ -317,6 +317,7 @@ enum {
 
 int main(int argc, char *argv[])
 {
+	char device_input[128];
 	char device[64];
 	char device_path[128];
 	int frequency = -1;
@@ -333,6 +334,7 @@ int main(int argc, char *argv[])
 
 	memset(sinks, 0, sizeof(sinks));
 
+	snprintf(device_input, sizeof(device_input), "cxadc0");
 	snprintf(device, sizeof(device), "cxadc0");
 	snprintf(device_path, sizeof(device_path), "/dev/cxadc0");
 
@@ -362,12 +364,11 @@ int main(int argc, char *argv[])
 	while ((c = getopt_long(argc, argv, "d:f:t:o:h", longopts, NULL)) != -1) {
 		switch (c) {
 		case 'd':
-			if (!cxadc_valid_device_name(optarg)) {
-				fprintf(stderr, "invalid device name: %s\n", optarg);
+			if (snprintf(device_input, sizeof(device_input), "%s", optarg) >=
+			    (int)sizeof(device_input)) {
+				fprintf(stderr, "device input too long: %s\n", optarg);
 				return 2;
 			}
-			snprintf(device, sizeof(device), "%s", optarg);
-			snprintf(device_path, sizeof(device_path), "/dev/%s", optarg);
 			break;
 		case 'f': frequency = atoi(optarg); break;
 		case 't': duration = atof(optarg); break;
@@ -421,6 +422,11 @@ int main(int argc, char *argv[])
 
 	if (nsinks == 0) {
 		fprintf(stderr, "no output specified (use -o, --stdout, --tcp, --listen or --fifo)\n");
+		return 2;
+	}
+
+	if (cxadc_resolve_device(device_input, device, sizeof(device), device_path,
+	    sizeof(device_path)) != 0) {
 		return 2;
 	}
 

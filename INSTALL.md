@@ -98,6 +98,14 @@ ls -l /dev/cxadc*
 Expected: `cxadc/0.5` shown by DKMS and at least `/dev/cxadc0` present when
 supported hardware is installed.
 
+If you define host-specific udev aliases (for example `/dev/cx/vcr0-video`),
+you can validate both alias path and bare alias resolution:
+
+```bash
+cxresolve /dev/cx/vcr0-video
+cxresolve vcr0-video
+```
+
 ### 9) Optional: install userland tools
 
 DKMS installs only the kernel module. Install CLI tools separately:

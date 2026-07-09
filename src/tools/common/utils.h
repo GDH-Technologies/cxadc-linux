@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
+#include <stddef.h>
 
 /*
  * Shared sysfs helpers for cxadc userland tools.
@@ -19,6 +20,23 @@ int set_cxadc_param(const char *param_name, const char *device, int param_value)
 
 /* Read an integer value from a cxadc sysfs parameter. */
 int read_cxadc_param(const char *param_name, const char *device, int *param_value);
+
+/*
+ * Resolve user-provided device input to a canonical cxadc class name plus an
+ * openable device node path.
+ *
+ * Accepted input forms:
+ * - class name: cxadc0
+ * - numeric index: 0 (maps to cxadc0)
+ * - absolute device path: /dev/cxadc0 or /dev/cx/vcr0-video
+ * - bare alias under /dev/cx: vcr0-video
+ */
+int cxadc_resolve_device(
+	const char *input,
+	char *canonical_device,
+	size_t canonical_device_len,
+	char *device_path,
+	size_t device_path_len);
 
 /*
  * Validate a cxadc device name: must be non-empty, <= 31 chars and contain

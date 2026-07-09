@@ -13,6 +13,7 @@
 
 int main(int argc, char *argv[]) {
 	int fd;
+	char device_input[128];
 	char device[64];
 	char device_path[128];
 	struct timeval t1, t2;
@@ -23,24 +24,25 @@ int main(int argc, char *argv[]) {
 	int c;
 
 	opterr = 0;
+	snprintf(device_input, sizeof(device_input), "cxadc0");
 	snprintf(device, sizeof(device), "cxadc0");
 	snprintf(device_path, sizeof(device_path), "/dev/cxadc0");
 
 	while ((c = getopt(argc, argv, "d:bx")) != -1) {
 		switch (c) {
 		case 'd':
-			if (!cxadc_valid_device_name(optarg)) {
-				fprintf(stderr, "invalid device name: %s\n", optarg);
+			if (snprintf(device_input, sizeof(device_input), "%s", optarg) >=
+			    (int)sizeof(device_input)) {
+				fprintf(stderr, "device input too long: %s\n", optarg);
 				return -1;
 			}
-			snprintf(device, sizeof(device), "%s", optarg);
-			snprintf(device_path, sizeof(device_path), "/dev/%s", optarg);
 			break;
 		case '?':
 			// clang-format off
 			fputs("levelmon continuously monitors levels from the specified cxadc card.\n", stderr);
 			fputs("\n", stderr);
-			fputs("levelmon -d <cxadc_device>\n", stderr);
+			fputs("levelmon -d <input>\n", stderr);
+			fputs("  input supports cxadcN, N, /dev/* and bare aliases under /dev/cx\n", stderr);
 			fputs("\n", stderr);
 			fputs("Output format:\n", stderr);
 			fputs(".   / clipped samples low\n", stderr);
@@ -57,6 +59,11 @@ int main(int argc, char *argv[]) {
 			// clang-format on
 			return -1;
 		}
+	}
+
+	if (cxadc_resolve_device(device_input, device, sizeof(device), device_path,
+	    sizeof(device_path)) != 0) {
+		return -1;
 	}
 
 	// Check existence without opening in read/write mode, which can block.

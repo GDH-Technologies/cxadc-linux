@@ -1,0 +1,158 @@
+name: Deploy cxadc-linux to cs0/cs1
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - src/**
+      - config/**
+      - Makefile
+      - dkms.conf
+      - src/scripts/deploy_dkms_install.sh
+      - .github/workflows/deploy.yml
+  workflow_dispatch:
+    inputs:
+      force_reinstall:
+        description: "Run deploy steps even if no relevant files changed"
+        required: false
+        type: boolean
+        default: false
+      reload_module:
+        description: "Unload/reload cxadc module after install (can disrupt active captures)"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-cxadc-linux
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy on ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [cs0, cs1]
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - ${{ matrix.host }}
+
+    steps:
+      - name: Build and deploy
+        shell: bash
+        env:
+          REPO_DIR: /opt/cxadc-linux
+          BRANCH: main
+          FORCE_REINSTALL: ${{ inputs.force_reinstall }}
+          RELOAD_MODULE: ${{ inputs.reload_module }}
+        run: |
+          set -euo pipefail
+
+          run_as_root() {
+            if [ "$(id -u)" -eq 0 ]; then
+              "$@"
+            else
+              sudo -n "$@"
+            fi
+          }
+
+          echo "Repo: ${REPO_DIR}"
+          echo "Branch: ${BRANCH}"
+          echo "Force reinstall: ${FORCE_REINSTALL:-false}"
+          echo "Reload module: ${RELOAD_MODULE:-false}"
+
+          if [ ! -d "${REPO_DIR}/.git" ]; then
+            echo "Repo not found at ${REPO_DIR}" >&2
+            exit 1
+          fi
+
+          cd "${REPO_DIR}"
+
+          current_branch="$(git rev-parse --abbrev-ref HEAD)"
+          if [ "${current_branch}" != "${BRANCH}" ]; then
+            echo "Expected branch ${BRANCH}, found ${current_branch}" >&2
+            exit 1
+          fi
+
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Working tree is dirty. Refusing to deploy:" >&2
+            git status --porcelain
+            exit 1
+          fi
+
+          git fetch --prune origin
+          old_rev="$(git rev-parse HEAD)"
+          git pull --ff-only origin "${BRANCH}"
+          new_rev="$(git rev-parse HEAD)"
+
+          echo "Revision: ${old_rev} -> ${new_rev}"
+
+          deploy_needed="false"
+          if [ "${FORCE_REINSTALL:-false}" = "true" ]; then
+            deploy_needed="true"
+            echo "Force reinstall requested"
+          elif [ "${old_rev}" != "${new_rev}" ]; then
+            changed_files="$(git diff --name-only "${old_rev}" "${new_rev}" || true)"
+            if [ -n "${changed_files}" ]; then
+              echo "Changed files:"
+              printf '%s\n' "${changed_files}"
+              if echo "${changed_files}" | grep -qE '^(src/|config/|Makefile|dkms\.conf)'; then
+                deploy_needed="true"
+              fi
+            fi
+          else
+            echo "No new commits"
+          fi
+
+          if [ "${deploy_needed}" != "true" ]; then
+            echo "No deploy-relevant changes; skipping install"
+            exit 0
+          fi
+
+          echo "Building module and userspace tools..."
+          make clean
+          make
+
+          echo "Installing tools/config and DKMS module via root helper..."
+          run_as_root /usr/bin/bash "${REPO_DIR}/src/scripts/deploy_dkms_install.sh"
+
+          if [ "${RELOAD_MODULE:-false}" = "true" ]; then
+            modprobe_bin="$(command -v modprobe)"
+            if [ -z "${modprobe_bin}" ]; then
+              echo "ERROR: modprobe not found" >&2
+              exit 1
+            fi
+            echo "Reloading cxadc module..."
+            run_as_root "${modprobe_bin}" -r cxadc || true
+            run_as_root "${modprobe_bin}" cxadc
+          else
+            echo "Skipping module reload (reload_module=false)"
+          fi
+
+          echo "Running post-deploy checks..."
+          if ! command -v cx-capture >/dev/null 2>&1; then
+            echo "ERROR: cx-capture not found in PATH after install" >&2
+            exit 1
+          fi
+          if ! command -v leveladj >/dev/null 2>&1; then
+            echo "ERROR: leveladj not found in PATH after install" >&2
+            exit 1
+          fi
+          if ! command -v cxadc-status >/dev/null 2>&1; then
+            echo "ERROR: cxadc-status not found in PATH after install" >&2
+            exit 1
+          fi
+
+          python3 -m py_compile src/tools/cxadc-status/cxadc-status
+          python3 src/tools/cxadc-status/cxadc-status --plain --no-color || true
+
+          dkms_name="$(awk -F= '/^PACKAGE_NAME=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
+          dkms_version="$(awk -F= '/^PACKAGE_VERSION=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
+          dkms status | grep -E "^${dkms_name}/${dkms_version},"
+
+          echo "Deploy completed on ${{ matrix.host }}"

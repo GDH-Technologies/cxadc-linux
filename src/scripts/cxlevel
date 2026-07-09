@@ -1,3 +1,20 @@
 #!/bin/bash
-echo $2 > /sys/class/cxadc/cxadc$1/device/parameters/level
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+	echo "Usage: cxlevel <device-input> <level-value>" >&2
+	exit 2
+fi
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+resolve_device() {
+	if command -v cxresolve >/dev/null 2>&1; then
+		cxresolve "$1"
+	else
+		bash "$script_dir/cxresolve" "$1"
+	fi
+}
+
+device_name="$(resolve_device "$1")"
+echo "$2" > "/sys/class/cxadc/${device_name}/device/parameters/level"
 cxvalues

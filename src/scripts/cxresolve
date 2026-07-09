@@ -1,0 +1,126 @@
+#!/bin/bash
+set -euo pipefail
+
+usage() {
+	cat <<'EOF'
+Usage: cxresolve [--path|--both] <device-input>
+
+Resolve a cxadc device input into canonical identifiers.
+
+Accepted input forms:
+  cxadc0            canonical class name
+  0                 numeric index shorthand (maps to cxadc0)
+  /dev/cxadc0       absolute node path
+  /dev/cx/vcr0-rf   absolute alias path
+  vcr0-rf           bare alias found under /dev/cx
+
+Output modes:
+  default  prints canonical class name (cxadcN)
+  --path   prints resolved device node path
+  --both   prints: <cxadcN><TAB><resolved path>
+EOF
+}
+
+mode="name"
+if [[ "${1:-}" == "--path" ]]; then
+	mode="path"
+	shift
+elif [[ "${1:-}" == "--both" ]]; then
+	mode="both"
+	shift
+elif [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+	usage
+	exit 0
+fi
+
+if [[ $# -ne 1 ]]; then
+	usage >&2
+	exit 2
+fi
+
+input="$1"
+resolved_path=""
+canonical=""
+
+resolve_from_candidate() {
+	local candidate="$1"
+	[[ -e "$candidate" ]] || return 1
+
+	local real
+	real="$(readlink -f -- "$candidate" 2>/dev/null || true)"
+	[[ -n "$real" ]] || real="$candidate"
+	[[ -c "$real" ]] || return 1
+
+	local dev_hex
+	dev_hex="$(stat -Lc '%t:%T' -- "$real" 2>/dev/null || true)"
+	[[ -n "$dev_hex" ]] || return 1
+
+	local sysdev raw dec_major dec_minor raw_hex devname
+	for sysdev in /sys/class/cxadc/*/dev; do
+		[[ -f "$sysdev" ]] || continue
+		raw="$(cat "$sysdev" 2>/dev/null || true)"
+		[[ "$raw" =~ ^[0-9]+:[0-9]+$ ]] || continue
+		dec_major="${raw%%:*}"
+		dec_minor="${raw##*:}"
+		raw_hex="$(printf '%x:%x' "$dec_major" "$dec_minor")"
+		if [[ "$raw_hex" == "$dev_hex" ]]; then
+			devname="$(basename "$(dirname "$sysdev")")"
+			canonical="$devname"
+			resolved_path="$real"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+attempt_resolve() {
+	local candidate="$1"
+	if resolve_from_candidate "$candidate"; then
+		return 0
+	fi
+	return 1
+}
+
+# Numeric shorthand: 0 -> /dev/cxadc0
+if [[ "$input" =~ ^[0-9]+$ ]]; then
+	attempt_resolve "/dev/cxadc${input}" || true
+fi
+
+# Absolute /dev path.
+if [[ -z "$canonical" && "$input" == /dev/* ]]; then
+	attempt_resolve "$input" || true
+fi
+
+# Canonical class name.
+if [[ -z "$canonical" && "$input" =~ ^cxadc[0-9]+$ ]]; then
+	attempt_resolve "/dev/${input}" || true
+fi
+
+# Relative /dev fragment, e.g. cx/vcr0-rf
+if [[ -z "$canonical" && "$input" == */* && "$input" != /* ]]; then
+	attempt_resolve "/dev/${input}" || true
+fi
+
+# Bare alias under /dev/cx.
+if [[ -z "$canonical" && "$input" != */* && "$input" != /* ]]; then
+	attempt_resolve "/dev/cx/${input}" || true
+fi
+
+# Last-chance relative /dev lookup.
+if [[ -z "$canonical" && "$input" != */* && "$input" != /* ]]; then
+	attempt_resolve "/dev/${input}" || true
+fi
+
+if [[ -z "$canonical" ]]; then
+	echo "failed to resolve '${input}' as cxadc device (expected cxadcN, N, /dev/*, or alias under /dev/cx)" >&2
+	exit 1
+fi
+
+if [[ "$mode" == "path" ]]; then
+	echo "$resolved_path"
+elif [[ "$mode" == "both" ]]; then
+	printf '%s\t%s\n' "$canonical" "$resolved_path"
+else
+	echo "$canonical"
+fi

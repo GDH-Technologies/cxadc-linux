@@ -19,12 +19,20 @@ There's a few steps to using cxlvlcavdd:
 
 1. Go to near the end of the disk, use leveladj and the gain POT of the amp to get leveladj to land at 1 or 2.
 2. Go to the beginning of the disc and run leveladj again.
-3. Finally, start the capture with `cxlvlcavdd CaptureFileName.r8`.
+3. Finally, start the capture with `cxlvlcavdd CaptureFileName.r8 [device-input]`.
 
 
 ## Command Arguments
 
-Most commands now take a numerical argument corresponding to the card you want to apply the change to. Commands that previously had an argument, that argument is now the second argument.  cxlvlcavdd assumes card 0 and does not take a numerical argument for the card.
+Most commands take a `device-input` argument and accept all of the following:
+
+- `cxadcN` (for example `cxadc0`)
+- numeric shorthand (for example `0`)
+- `/dev/*` path (for example `/dev/cxadc0` or `/dev/cx/vcr0-video`)
+- bare alias under `/dev/cx` (for example `vcr0-video`)
+
+Commands that previously took a value argument still use that value as the
+second argument.
 
 cx8fsc = set 8fsc sample rate mode on card 0.  1x crystal speed.
 
@@ -50,7 +58,19 @@ cxlevel = set cx card level 0-31.
 
 cxlvlcavdd = A capture script to use that adjusts the gain automatically.
 
+cxresolve = Resolve any supported device input into canonical `cxadcN` (or
+print the resolved node path with `cxresolve --path ...`).
+
 cxvalues = display current values of cx card module parameters.
+
+Example:
+
+```bash
+cx8fsc vcr0-video
+cxfreq /dev/cx/vcr0-video 40
+cxlevel cxadc1 12
+cxlvlcavdd CaptureFileName.r8 vcr0-video
+```
 
 
 ## Example of CX Values with 4 Cards

@@ -19,8 +19,47 @@
 import time
 import os
 import sys
+import subprocess
 import datetime
 import numpy as np
+
+def resolve_device_input(device_input):
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    local_resolver = os.path.join(script_dir, "cxresolve")
+
+    attempts = []
+    if os.path.exists(local_resolver):
+        attempts.append(["bash", local_resolver, "--both", device_input])
+    attempts.append(["cxresolve", "--both", device_input])
+
+    errors = []
+    for cmd in attempts:
+        try:
+            out = subprocess.check_output(cmd, text=True).strip()
+            parts = out.split("\t", 1)
+            if len(parts) != 2:
+                raise RuntimeError("resolver output missing separator")
+            return parts[0], parts[1]
+        except Exception as exc:
+            errors.append(f"{' '.join(cmd)} -> {exc}")
+
+    raise RuntimeError(
+        "failed to resolve device input '{}':\n{}".format(
+            device_input,
+            "\n".join(errors),
+        )
+    )
+
+
+if len(sys.argv) < 2:
+    print("Usage: cxlvlcavdd <output-file> [device-input]", file=sys.stderr)
+    sys.exit(2)
+
+OUTPUT_PATH = sys.argv[1]
+DEVICE_INPUT = sys.argv[2] if len(sys.argv) > 2 else "0"
+DEVICE_NAME, DEVICE_NODE_PATH = resolve_device_input(DEVICE_INPUT)
+SYSFS_BASE = f"/sys/class/cxadc/{DEVICE_NAME}/device/parameters"
+
 def read_in_chunks(file_object):
     global BUFSIZE
     while True:
@@ -30,8 +69,7 @@ def read_in_chunks(file_object):
         yield data
 
 def child16(data):
-    #syssyfsfile = open(r"/sys/module/cxadc/parameters/level","r")    
-    syssyfsfile = open(r"/sys/class/cxadc/cxadc0/device/parameters/level","r")    
+    syssyfsfile = open(f"{SYSFS_BASE}/level","r")
     GainLevel = int(syssyfsfile.read())
     syssyfsfile.close()
     OldGainLevel = GainLevel
@@ -72,8 +110,7 @@ def child16(data):
         else:
             GainAction = "Raising Gain: " + str(GainLevel) + " "
     if OldGainLevel != GainLevel:
-        #syssyfsfile = open(r"/sys/module/cxadc/parameters/level","w")
-        syssyfsfile = open(r"/sys/class/cxadc/cxadc0/device/parameters/level","w")
+        syssyfsfile = open(f"{SYSFS_BASE}/level","w")
         syssyfsfile.write(str(GainLevel))
         syssyfsfile.close()
 
@@ -82,8 +119,7 @@ def child16(data):
     os._exit(0)
 
 def child(data):
-    #syssyfsfile = open(r"/sys/module/cxadc/parameters/level","r")    
-    syssyfsfile = open(r"/sys/class/cxadc/cxadc0/device/parameters/level","r")    
+    syssyfsfile = open(f"{SYSFS_BASE}/level","r")
     GainLevel = int(syssyfsfile.read())
     syssyfsfile.close()
     OldGainLevel = GainLevel
@@ -121,8 +157,7 @@ def child(data):
         else:
             GainAction = "Raising Gain: " + str(GainLevel) + " "
     if GainLevel != OldGainLevel:
-        #syssyfsfile = open(r"/sys/module/cxadc/parameters/level","w")
-        syssyfsfile = open(r"/sys/class/cxadc/cxadc0/device/parameters/level","w")
+        syssyfsfile = open(f"{SYSFS_BASE}/level","w")
         syssyfsfile.write(str(GainLevel))
         syssyfsfile.close()
         
@@ -132,17 +167,16 @@ def child(data):
 
 ##########################################################################################################
 
-name_in  = "/dev/cxadc0"
-name_out = sys.argv[1]
+name_in  = DEVICE_NODE_PATH
+name_out = OUTPUT_PATH
 CheckInterval = 150 #checking interval 125 = ~7sec@40msps
 CountVar = -150
 BUFSIZE   = 2097152
-#syssyfsfile = open(r"/sys/module/cxadc/parameters/tenbit","r")
-syssyfsfile = open(r"/sys/class/cxadc/cxadc0/device/parameters/tenbit","r")
+syssyfsfile = open(f"{SYSFS_BASE}/tenbit","r")
 tenbit = int(syssyfsfile.read())
 syssyfsfile.close()
 val_compare = (2 ** ((tenbit+1)*8)) -1
-print ("using: /dev/cxadc0")
+print ("using:", name_in, "(", DEVICE_NAME, ")")
 print (val_compare,tenbit)
 in_fh = open(name_in, "rb")
 out_fh = open(name_out, "wb")

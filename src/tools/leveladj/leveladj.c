@@ -26,6 +26,7 @@ int main(int argc, char *argv[])
 {
 	int fd;
 	int level;
+	char device_input[128];
 	char device[64];
 	char device_path[128];
 
@@ -34,6 +35,7 @@ int main(int argc, char *argv[])
 	int c;
 
 	opterr = 0;
+	snprintf(device_input, sizeof(device_input), "cxadc0");
 	snprintf(device, sizeof(device), "cxadc0");
 	snprintf(device_path, sizeof(device_path), "/dev/cxadc0");
 
@@ -46,15 +48,18 @@ int main(int argc, char *argv[])
 			tenxfsc = 1;
 			break;
 		case 'd':
-			if (!cxadc_valid_device_name(optarg)) {
-				fprintf(stderr, "invalid device name: %s\n", optarg);
+			if (snprintf(device_input, sizeof(device_input), "%s", optarg) >=
+			    (int)sizeof(device_input)) {
+				fprintf(stderr, "device input too long: %s\n", optarg);
 				return -1;
 			}
-			snprintf(device, sizeof(device), "%s", optarg);
-			snprintf(device_path, sizeof(device_path), "/dev/%s", optarg);
 			break;
 		}
 	}
+
+	if (cxadc_resolve_device(device_input, device, sizeof(device), device_path,
+	    sizeof(device_path)) != 0)
+		return -1;
 
 	/* Check the device exists without opening it (open can disturb capture). */
 	if (access(device_path, F_OK) != 0) {
