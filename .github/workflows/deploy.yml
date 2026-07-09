@@ -46,7 +46,7 @@ jobs:
       - name: Build and deploy
         shell: bash
         env:
-          REPO_DIR: /opt/cxadc-linux
+          REPO_DIR: /home/rdodge/Repos/cxadc-linux
           BRANCH: main
           FORCE_REINSTALL: ${{ inputs.force_reinstall }}
           RELOAD_MODULE: ${{ inputs.reload_module }}

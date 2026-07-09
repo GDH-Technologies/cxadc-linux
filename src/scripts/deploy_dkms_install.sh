@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_dir="/opt/cxadc-linux"
+repo_dir="/home/rdodge/Repos/cxadc-linux"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "ERROR: deploy_dkms_install.sh must run as root" >&2
