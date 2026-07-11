@@ -1,4 +1,4 @@
-name: Deploy cxadc-linux to cs0/cs1
+name: Deploy cxadc-linux to cs0, cs1, and wm
 
 on:
   push:
@@ -35,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        host: [cs0, cs1]
+        host: [cs0, cs1, wm]
     runs-on:
       - self-hosted
       - Linux
