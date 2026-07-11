@@ -196,6 +196,8 @@ function sanity_checks
 			CLOCK_GEN_ALSA_DEVICE="$CLOCK_GEN_ALSA_ALIAS_DEFAULT"
 		else
 			CLOCK_GEN_ALSA_DEVICE="$CLOCK_GEN_ALSA_DEVICE_FALLBACK"
+			echo "WARNING: ALSA alias '$CLOCK_GEN_ALSA_ALIAS_DEFAULT' was not found; falling back to '$CLOCK_GEN_ALSA_DEVICE_FALLBACK'." >&2
+			echo "         Install host aliases in /etc/asound.conf for stable routing." >&2
 		fi
 	fi
 

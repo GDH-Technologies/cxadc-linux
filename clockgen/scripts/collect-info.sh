@@ -13,6 +13,8 @@ if [[ -z "$alsadevice" ]] ; then
 		alsadevice="$clockgen_alias"
 	else
 		alsadevice="$clockgen_fallback"
+		echo "WARNING: ALSA alias '$clockgen_alias' not found; collecting diagnostics via fallback '$clockgen_fallback'." >&2
+		echo "         Install host aliases in /etc/asound.conf for stable routing." >&2
 	fi
 fi
 

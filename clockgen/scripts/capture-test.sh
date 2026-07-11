@@ -12,6 +12,8 @@ sudo -v
 
 if ! arecord -L | grep -Fxq "$CLOCK_GEN_ALSA_DEVICE"; then
   CLOCK_GEN_ALSA_DEVICE="$CLOCK_GEN_ALSA_DEVICE_FALLBACK"
+  echo "WARNING: ALSA alias was not found; falling back to '$CLOCK_GEN_ALSA_DEVICE_FALLBACK'." >&2
+  echo "         Install host aliases in /etc/asound.conf for stable routing." >&2
 fi
 
 if sudo fuser /dev/cxadc0 > /dev/null 2>&1; then
