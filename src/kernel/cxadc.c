@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * cxadc - CX2388x ADC DMA driver for Linux, version 0.5
+ * cxadc - CX2388x ADC DMA driver for Linux, version 1.0
  *
  * Copyright (C) 2005-2007 Hew How Chee <how_chee@yahoo.com>
  * Copyright (C) 2013-2015 Chad Page <Chad.Page@gmail.com>

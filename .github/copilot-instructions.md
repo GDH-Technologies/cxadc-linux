@@ -75,7 +75,7 @@ make clean
 - Do not load `cxadc` and stock `cx88` drivers at the same time.
 - Preserve sysfs parameter compatibility and naming in `/sys/class/cxadc/*/device/parameters/`.
 - Avoid disruptive behavior in tools that might interfere with active capture sessions. In particular, diagnostic tools (`cxadc-status`) must never open `/dev/cxadcN`; inspect sysfs/procfs only.
-- Keep DKMS installation instructions consistent with README (current package version is `0.5`).
+- Keep DKMS installation instructions consistent with README (current package version is `1.0`).
 
 ## Clockgen Notes
 

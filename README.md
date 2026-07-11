@@ -494,6 +494,7 @@ wait
 > Secure Boot is the **most common** cause of driver load failures, especially with PCIe devices.
 
 **Check status:**
+
 ```bash
 mokutil --sb-state
 ```
@@ -510,9 +511,12 @@ mokutil --sb-state
 > [!NOTE]
 > If using **DKMS**, the driver automatically rebuilds on kernel update. Manual installs require reinstallation.
 
+Current DKMS package version: `1.0`
+
 **If driver stops loading after kernel update:**
 
 1. Check if DKMS is active:
+
    ```bash
    dkms status | grep cxadc
    ```
@@ -520,9 +524,13 @@ mokutil --sb-state
 2. **If DKMS is installed:** Rebuild automatically or manually:
 
    ```bash
-   sudo rsync -a --delete --exclude '.git' ./ /usr/src/cxadc-0.1/
-   sudo dkms build -m cxadc -v 0.1
-   sudo dkms install -m cxadc -v 0.1 --force
+   dkms_name="$(awk -F= '/^PACKAGE_NAME=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
+   dkms_version="$(awk -F= '/^PACKAGE_VERSION=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
+   sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ "/usr/src/${dkms_name}-${dkms_version}/"
+   sudo dkms remove -m "${dkms_name}" -v "${dkms_version}" --all || true
+   sudo dkms add "/usr/src/${dkms_name}-${dkms_version}"
+   sudo dkms build -m "${dkms_name}" -v "${dkms_version}" -k "$(uname -r)"
+   sudo dkms install -m "${dkms_name}" -v "${dkms_version}" -k "$(uname -r)" --force
    sudo depmod -a
    ```
 

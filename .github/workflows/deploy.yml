@@ -24,6 +24,21 @@ on:
         required: false
         type: boolean
         default: false
+      target_kernel:
+        description: "Kernel release to install DKMS module for (empty = current uname -r)"
+        required: false
+        type: string
+        default: ""
+      install_all_kernels:
+        description: "Build/install DKMS module for all /lib/modules kernels"
+        required: false
+        type: boolean
+        default: false
+      prune_old_versions:
+        description: "Remove stale cxadc DKMS versions after successful install"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-cxadc-linux
@@ -50,6 +65,9 @@ jobs:
           BRANCH: master
           FORCE_REINSTALL: ${{ inputs.force_reinstall }}
           RELOAD_MODULE: ${{ inputs.reload_module }}
+          DKMS_TARGET_KERNEL: ${{ inputs.target_kernel }}
+          DKMS_INSTALL_ALL_KERNELS: ${{ inputs.install_all_kernels }}
+          PRUNE_OLD_DKMS_VERSIONS: ${{ inputs.prune_old_versions }}
         run: |
           set -euo pipefail
 
@@ -65,6 +83,9 @@ jobs:
           echo "Branch: ${BRANCH}"
           echo "Force reinstall: ${FORCE_REINSTALL:-false}"
           echo "Reload module: ${RELOAD_MODULE:-false}"
+          echo "DKMS target kernel: ${DKMS_TARGET_KERNEL:-}"
+          echo "DKMS install all kernels: ${DKMS_INSTALL_ALL_KERNELS:-false}"
+          echo "Prune old DKMS versions: ${PRUNE_OLD_DKMS_VERSIONS:-false}"
 
           if [ ! -d "${REPO_DIR}/.git" ]; then
             echo "Repo not found at ${REPO_DIR}" >&2
@@ -91,6 +112,23 @@ jobs:
           new_rev="$(git rev-parse HEAD)"
 
           echo "Revision: ${old_rev} -> ${new_rev}"
+
+          echo "Checking DKMS version consistency (dkms.conf, kernel source, README)..."
+          dkms_version="$(awk -F= '/^PACKAGE_VERSION=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
+          kernel_version="$(sed -nE 's/.*version ([0-9]+(\.[0-9]+)*)/\1/p' src/kernel/cxadc.c | head -n1)"
+          readme_version="$(sed -nE 's/.*Current DKMS package version:[[:space:]]*`([^`]+)`.*/\1/p' README.md | head -n1)"
+
+          if [ -z "${dkms_version}" ] || [ -z "${kernel_version}" ] || [ -z "${readme_version}" ]; then
+            echo "ERROR: missing version marker in dkms.conf/src/kernel/cxadc.c/README.md" >&2
+            exit 1
+          fi
+          if [ "${dkms_version}" != "${kernel_version}" ] || [ "${dkms_version}" != "${readme_version}" ]; then
+            echo "ERROR: version mismatch detected" >&2
+            echo "  dkms.conf: ${dkms_version}" >&2
+            echo "  src/kernel/cxadc.c: ${kernel_version}" >&2
+            echo "  README.md: ${readme_version}" >&2
+            exit 1
+          fi
 
           deploy_needed="false"
           if [ "${FORCE_REINSTALL:-false}" = "true" ]; then
@@ -119,7 +157,11 @@ jobs:
           make
 
           echo "Installing tools/config and DKMS module via root helper..."
-          run_as_root /usr/bin/bash "${REPO_DIR}/src/scripts/deploy_dkms_install.sh"
+          run_as_root env \
+            DKMS_TARGET_KERNEL="${DKMS_TARGET_KERNEL:-}" \
+            DKMS_INSTALL_ALL_KERNELS="${DKMS_INSTALL_ALL_KERNELS:-false}" \
+            PRUNE_OLD_DKMS_VERSIONS="${PRUNE_OLD_DKMS_VERSIONS:-false}" \
+            /usr/bin/bash "${REPO_DIR}/src/scripts/deploy_dkms_install.sh"
 
           if [ "${RELOAD_MODULE:-false}" = "true" ]; then
             modprobe_bin="$(command -v modprobe)"
@@ -153,6 +195,32 @@ jobs:
 
           dkms_name="$(awk -F= '/^PACKAGE_NAME=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
           dkms_version="$(awk -F= '/^PACKAGE_VERSION=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
-          dkms status | grep -E "^${dkms_name}/${dkms_version},"
+
+          dkms_status="$(dkms status -m "${dkms_name}" -v "${dkms_version}" || true)"
+          echo "${dkms_status}"
+          if ! echo "${dkms_status}" | grep -qE "^${dkms_name}/${dkms_version}, .*: installed"; then
+            echo "ERROR: target DKMS version is not installed" >&2
+            exit 1
+          fi
+          if echo "${dkms_status}" | grep -qE "^${dkms_name}/${dkms_version}, .*: built$"; then
+            echo "ERROR: target DKMS version is built but not installed for at least one kernel" >&2
+            exit 1
+          fi
+          if echo "${dkms_status}" | grep -q "Differences between built and installed modules"; then
+            echo "ERROR: target DKMS version reports installed-module drift" >&2
+            exit 1
+          fi
+
+          modinfo_path="$(modinfo -n cxadc)"
+          if ! echo "${modinfo_path}" | grep -q '/updates/dkms/'; then
+            echo "ERROR: cxadc module path is not from updates/dkms: ${modinfo_path}" >&2
+            exit 1
+          fi
+
+          running_kernel="$(uname -r)"
+          if ! modinfo -F vermagic cxadc | grep -q "${running_kernel}"; then
+            echo "ERROR: cxadc vermagic does not match running kernel ${running_kernel}" >&2
+            exit 1
+          fi
 
           echo "Deploy completed on ${{ matrix.host }}"
