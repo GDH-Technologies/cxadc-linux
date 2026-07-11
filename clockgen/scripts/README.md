@@ -5,12 +5,16 @@ Helper scripts related to the clockgen firmware and capture workflow.
 ## [capture-vhs.sh](capture-vhs.sh)
 
 A simple bash script to record all 3 streams from a VHS using the clock generator.
+
 - RF Video from a CXADC
 - RF Audio from a CXADC
 - Linear Audio
 
 Common environment overrides:
-- CLOCK_GEN_ALSA_DEVICE (default: hw:CARD=CXADCADCClockGe)
+
+- CLOCK_GEN_ALSA_DEVICE (default: auto-detect alias `vcr0-clockgen-audio`, fallback `hw:CARD=CXADCADCClockGe`)
+- CLOCK_GEN_ALSA_ALIAS_DEFAULT (default: `vcr0-clockgen-audio`)
+- CLOCK_GEN_ALSA_DEVICE_FALLBACK (default: `hw:CARD=CXADCADCClockGe`)
 - CXCARD_VIDEO_DEVICE / CXCARD_AUDIO_DEVICE
 - CXCARD_VIDEO_CLOCK / CXCARD_AUDIO_CLOCK
 
@@ -19,6 +23,9 @@ To discover the ALSA device name on your host:
 ```bash
 arecord -L | grep -i -E "clock|cxadc|uac"
 ```
+
+If host aliases are installed (recommended), commands should use alias names such as
+`vcr0-clockgen-audio` for stable routing across reboots.
 
 ## [collect-info.sh](collect-info.sh)
 
@@ -41,4 +48,3 @@ curl https://raw.githubusercontent.com/GDH-Technologies/cxadc-linux/main/clockge
 # if you have wget installed
 wget -O - https://raw.githubusercontent.com/GDH-Technologies/cxadc-linux/main/clockgen/scripts/collect-info.sh | bash
 ```
- 

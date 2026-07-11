@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2023 Rene Wolf
 
-CLOCK_GEN_ALSA_DEVICE="${CLOCK_GEN_ALSA_DEVICE:-hw:CARD=CXADCADCClockGe}"
+CLOCK_GEN_ALSA_DEVICE="${CLOCK_GEN_ALSA_DEVICE:-}"
+CLOCK_GEN_ALSA_ALIAS_DEFAULT="${CLOCK_GEN_ALSA_ALIAS_DEFAULT:-vcr0-clockgen-audio}"
+CLOCK_GEN_ALSA_DEVICE_FALLBACK="${CLOCK_GEN_ALSA_DEVICE_FALLBACK:-hw:CARD=CXADCADCClockGe}"
 
 # NOTE can be adapted to your setup by exporting these variables before running the script
 CLOCK_GEN_OUT_VIDEO="${CLOCK_GEN_OUT_VIDEO:-0}"
@@ -189,7 +191,17 @@ function sanity_checks
 	command -v sox > /dev/null 2>&1 || die "SoX does not seem to be installed; install sox"
 	command -v pv > /dev/null 2>&1 || die "pv does not seem to be installed; install pv"
 
-	arecord -L | grep -q "^$CLOCK_GEN_ALSA_DEVICE" || die "arecord can't find the clock gen '$CLOCK_GEN_ALSA_DEVICE'; check that the device is plugged in and that user $(whoami) can access ALSA capture devices"
+	if [[ -z "$CLOCK_GEN_ALSA_DEVICE" ]] ; then
+		if arecord -L | grep -Fxq "$CLOCK_GEN_ALSA_ALIAS_DEFAULT" ; then
+			CLOCK_GEN_ALSA_DEVICE="$CLOCK_GEN_ALSA_ALIAS_DEFAULT"
+		else
+			CLOCK_GEN_ALSA_DEVICE="$CLOCK_GEN_ALSA_DEVICE_FALLBACK"
+			echo "WARNING: ALSA alias '$CLOCK_GEN_ALSA_ALIAS_DEFAULT' was not found; falling back to '$CLOCK_GEN_ALSA_DEVICE_FALLBACK'." >&2
+			echo "         Install host aliases in /etc/asound.conf for stable routing." >&2
+		fi
+	fi
+
+	arecord -L | grep -Fxq "$CLOCK_GEN_ALSA_DEVICE" || die "arecord can't find the clock gen '$CLOCK_GEN_ALSA_DEVICE'; check aliases in /etc/asound.conf or fallback to '$CLOCK_GEN_ALSA_DEVICE_FALLBACK'"
 	if [[ ! -e "/dev/cxadc${CXCARD_VIDEO_DEVICE}" ]] ; then die "Can't find video device /dev/cxadc${CXCARD_VIDEO_DEVICE}" ; fi
 	if [[ ! -e "/dev/cxadc${CXCARD_AUDIO_DEVICE}" ]] ; then die "Can't find audio device /dev/cxadc${CXCARD_AUDIO_DEVICE}" ; fi
 }
@@ -209,7 +221,8 @@ function usage
 	echo "   All stored as individual files into the given directory."
 	echo ""
 	echo "Setup can be overridden with environment variables, for example:"
-	echo "CLOCK_GEN_ALSA_DEVICE=hw:CARD=CXADCADCClockGe CXCARD_VIDEO_DEVICE=0 CXCARD_AUDIO_DEVICE=1 ./$MY_NAME /capture/output"
+	echo "CLOCK_GEN_ALSA_DEVICE=vcr0-clockgen-audio CXCARD_VIDEO_DEVICE=0 CXCARD_AUDIO_DEVICE=1 ./$MY_NAME /capture/output"
+	echo "(If aliases are unavailable, set CLOCK_GEN_ALSA_DEVICE=hw:CARD=CXADCADCClockGe)"
 	echo ""
 	echo "For more details, see $url"
 }
