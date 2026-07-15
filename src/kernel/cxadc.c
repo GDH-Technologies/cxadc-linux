@@ -21,6 +21,7 @@
 #include "cx88-reg.h"
 
 #include <linux/version.h>
+#include <linux/atomic.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/module.h>
@@ -93,6 +94,24 @@ struct cxadc {
 
 	atomic_t lgpcnt;
 	int initial_page;
+
+	/*
+	 * Ring-overrun accounting. The DMA engine writes the 64 MB ring
+	 * (MAX_DMA_PAGE pages) circularly and MO_VBI_GPCNT wraps with it, so
+	 * a reader that falls a full ring behind is silently served
+	 * overwritten pages. The IRQ handler counts hardware counter wraps
+	 * (writer laps) to build a monotonic page total; read() compares it
+	 * against the reader's own monotonic progress and bumps
+	 * overrun_count whenever the writer is >= one full ring ahead.
+	 * writer_laps/last_irq_gp_cnt are only touched from the IRQ handler;
+	 * reader_base_pages only from open()/read() while the device is held.
+	 */
+	u64 writer_laps;
+	int last_irq_gp_cnt;
+	atomic64_t writer_total_pages;
+	s64 reader_base_pages;
+	atomic_t overrun_count;
+
 	/* device attributes */
 	int latency;
 	int audsel;
@@ -340,6 +359,22 @@ static ssize_t mycxadc_center_offset_store(struct device *dev,
 	return count;
 }
 
+/*
+ * show for overrun_count (read-only; reset when the device is opened)
+ */
+
+static ssize_t mycxadc_overrun_count_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct cxadc *mycxadc = dev_get_drvdata(dev);
+	int len;
+
+	len = sprintf(buf, "%d\n", atomic_read(&mycxadc->overrun_count));
+	if (len <= 0)
+		dev_err(dev, "cxadc: Invalid sprintf len: %d\n", len);
+	return len;
+}
+
 static struct device_attribute dev_attr_latency = {
 	.attr = {
 		.name = "latency",
@@ -421,6 +456,14 @@ static struct device_attribute dev_attr_center_offset = {
 	.store = mycxadc_center_offset_store,
 };
 
+static struct device_attribute dev_attr_overrun_count = {
+	.attr = {
+		.name = "overrun_count",
+		.mode = 0444,
+	},
+	.show = mycxadc_overrun_count_show,
+};
+
 static struct attribute *mycxadc_attrs[] = {
 	&dev_attr_latency.attr,
 	&dev_attr_audsel.attr,
@@ -431,6 +474,7 @@ static struct attribute *mycxadc_attrs[] = {
 	&dev_attr_sixdb.attr,
 	&dev_attr_crystal.attr,
 	&dev_attr_center_offset.attr,
+	&dev_attr_overrun_count.attr,
 	NULL
 };
 
@@ -696,6 +740,13 @@ static int cxadc_char_open(struct inode *inode, struct file *file)
 
 	file->private_data = ctd;
 
+	/* Reset overrun accounting before interrupts can fire. */
+	ctd->writer_laps = 0;
+	ctd->last_irq_gp_cnt = 0;
+	atomic64_set(&ctd->writer_total_pages, 0);
+	ctd->reader_base_pages = 0;
+	atomic_set(&ctd->overrun_count, 0);
+
 	atomic_set(&ctd->lgpcnt, -1);
 	cx_write(MO_PCI_INTMSK, 1); /* enable interrupt */
 
@@ -711,6 +762,12 @@ static int cxadc_char_open(struct inode *inode, struct file *file)
 	}
 
 	ctd->initial_page = atomic_read(&ctd->lgpcnt);
+	/*
+	 * The reader starts at the writer's current position; anchor its
+	 * monotonic page counter there so read() can measure how far the
+	 * writer pulls ahead.
+	 */
+	ctd->reader_base_pages = atomic64_read(&ctd->writer_total_pages);
 
 	return 0;
 }
@@ -734,12 +791,27 @@ static ssize_t cxadc_char_read(struct file *file, char __user *tgt,
 	unsigned int rv = 0;
 	unsigned int pnum;
 	int gp_cnt;
+	bool overrun_noted = false;
 
 	pnum = (*offset % VBI_DMA_BUFF_SIZE) / PAGE_SIZE;
 	pnum += ctd->initial_page;
 	pnum %= MAX_DMA_PAGE;
 
 	gp_cnt = atomic_read(&ctd->lgpcnt);
+
+	/*
+	 * If the writer's monotonic page total is a full ring (or more)
+	 * ahead of the reader's, pages the reader has yet to consume have
+	 * already been overwritten: samples are lost. writer_total_pages is
+	 * rounded down to the last IRQ boundary, so this can never
+	 * false-positive. Count at most once per read() call.
+	 */
+	if (atomic64_read(&ctd->writer_total_pages) -
+	    (ctd->reader_base_pages + (s64)(*offset >> PAGE_SHIFT)) >=
+	    MAX_DMA_PAGE) {
+		atomic_inc(&ctd->overrun_count);
+		overrun_noted = true;
+	}
 
 	if ((pnum == gp_cnt) && (file->f_flags & O_NONBLOCK))
 		return rv;
@@ -789,6 +861,16 @@ static ssize_t cxadc_char_read(struct file *file, char __user *tgt,
 			}
 
 			gp_cnt = atomic_read(&ctd->lgpcnt);
+
+			/* Re-check for overrun on very large reads that span
+			 * multiple IRQ periods (see check at entry). */
+			if (!overrun_noted &&
+			    atomic64_read(&ctd->writer_total_pages) -
+			    (ctd->reader_base_pages +
+			     (s64)(*offset >> PAGE_SHIFT)) >= MAX_DMA_PAGE) {
+				atomic_inc(&ctd->overrun_count);
+				overrun_noted = true;
+			}
 		}
 	};
 
@@ -848,6 +930,17 @@ static irqreturn_t cxadc_irq(int irq, void *dev_id)
 		   in main memory. so we only retrieve MO_VBI_GPCNT after an interrupt has occurred and then round
 		   it down to the last page that we know should have triggered an interrupt. */
 		gp_cnt &= ~(IRQ_PERIOD_IN_PAGES - 1);
+		/*
+		 * MO_VBI_GPCNT wraps with the 64 MB ring; a decrease between
+		 * interrupts means the writer completed another lap. IRQs fire
+		 * every IRQ_PERIOD_IN_PAGES (16 per lap), so a wrap cannot be
+		 * missed unless interrupts stall for a whole lap (~2 s).
+		 */
+		if (gp_cnt < ctd->last_irq_gp_cnt)
+			ctd->writer_laps++;
+		ctd->last_irq_gp_cnt = gp_cnt;
+		atomic64_set(&ctd->writer_total_pages,
+			     (s64)ctd->writer_laps * MAX_DMA_PAGE + gp_cnt);
 		atomic_set(&ctd->lgpcnt, gp_cnt);
 		wake_up_interruptible(&ctd->readQ);
 	}
