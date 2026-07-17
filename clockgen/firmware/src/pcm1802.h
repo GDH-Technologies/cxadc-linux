@@ -11,7 +11,10 @@ extern "C" {
 #include <stdint.h>
 #include "pico/stdlib.h"
 
+// counts words dropped to re-acquire the L/R phase
 extern uint32_t pcm1802_out_of_sync_drops;
+// with the DMA capture path these two count consumer overruns:
+// _count = number of times the consumer fell behind the DMA ring, _value = ring lag (in halves) at the last overrun
 extern uint32_t pcm1802_rch_tmo_count;
 extern uint32_t pcm1802_rch_tmo_value;
 

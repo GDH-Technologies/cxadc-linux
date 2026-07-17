@@ -14,8 +14,10 @@
 #include "adc_power.h"
 
 // The exact value does not matter, it just has to be large enough to not run out
-// between two regular sample values. A value of 0xffff will timout about 100 times per second
-#define TIMEOUT_COUNT_DOWN 0xffff
+// between two regular sample values. With the DMA capture path samples arrive in
+// ~1.4 ms half-buffer chunks, so the timeout must comfortably cover one chunk
+// period while still tripping quickly (~10 ms) when the ADC clocks actually stop.
+#define TIMEOUT_COUNT_DOWN 0x3ffff
 
 static bool fill_buffer_normal(usb_audio_buffer* buffer)
 {

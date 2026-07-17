@@ -19,7 +19,7 @@ target_include_directories(firmware PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 
 
 
-target_link_libraries(firmware PRIVATE pico_stdlib pico_multicore pico_unique_id hardware_i2c hardware_uart hardware_pio tinyusb_device tinyusb_board)
+target_link_libraries(firmware PRIVATE pico_stdlib pico_multicore pico_unique_id hardware_i2c hardware_uart hardware_pio hardware_dma tinyusb_device tinyusb_board)
 
 
 pico_add_extra_outputs(firmware)
