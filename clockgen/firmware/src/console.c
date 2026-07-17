@@ -117,6 +117,8 @@ static void cmd_status()
 	put_kv_u32("wdt_rebooted", snapshot.wdt_rebooted);
 	put_kv_u32("wdt_trace_core0", snapshot.wdt_trace_core0);
 	put_kv_u32("wdt_trace_core1", snapshot.wdt_trace_core1);
+	put_kv_u32("wdt_trace_usb_isr", snapshot.wdt_trace_usb_isr);
+	put_kv_u32("wdt_trace_usb_evt", snapshot.wdt_trace_usb_evt);
 }
 
 static void dispatch_line(const char* line)

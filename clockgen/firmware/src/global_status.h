@@ -52,6 +52,11 @@ typedef struct __attribute__((packed))
 	// last breadcrumb each core dropped before the watchdog reboot (see wdt_trace.h)
 	uint8_t   wdt_trace_core0;
 	uint8_t   wdt_trace_core1;
+	// USB driver breadcrumbs (patched into the vendored TinyUSB rp2040 dcd):
+	// isr: 0xA0 = died inside the USB ISR, 0xA1 = ISR exited cleanly, 0xC0 = unhandled-IRQ trap
+	// evt: 0xB0 = inactive-EP completion dropped, 0xB1 = forced buffer re-arm (most recent event)
+	uint8_t   wdt_trace_usb_isr;
+	uint8_t   wdt_trace_usb_evt;
 }
 global_status_fields;
 

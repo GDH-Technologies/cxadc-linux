@@ -23,23 +23,33 @@ void wdt_trace_init()
 	{
 		uint8_t t0 = (uint8_t)watchdog_hw->scratch[0];
 		uint8_t t1 = (uint8_t)watchdog_hw->scratch[1];
+		uint8_t ti = (uint8_t)watchdog_hw->scratch[2];
+		uint8_t te = (uint8_t)watchdog_hw->scratch[3];
 
 		global_status_access(
 		{
 			global_status.wdt_rebooted = true_u8;
 			global_status.wdt_trace_core0 = t0;
 			global_status.wdt_trace_core1 = t1;
+			global_status.wdt_trace_usb_isr = ti;
+			global_status.wdt_trace_usb_evt = te;
 		});
 
 		dbg_say("!! watchdog reboot, trace core0=");
 		dbg_u8(t0);
 		dbg_say(" core1=");
 		dbg_u8(t1);
+		dbg_say(" isr=");
+		dbg_u8(ti);
+		dbg_say(" evt=");
+		dbg_u8(te);
 		dbg_say("\n");
 	}
 
 	wdt_trace_core0(WDT_TRACE0_IDLE);
 	wdt_trace_core1(WDT_TRACE1_IDLE);
+	watchdog_hw->scratch[2] = 0;
+	watchdog_hw->scratch[3] = 0;
 
 	last_heartbeat_value = main1_heartbeat;
 	last_heartbeat_change_us = time_us_32();
