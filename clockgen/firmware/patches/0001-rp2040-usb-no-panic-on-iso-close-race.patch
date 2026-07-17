@@ -1,25 +1,137 @@
+diff --git a/src/portable/raspberrypi/rp2040/dcd_rp2040.c b/src/portable/raspberrypi/rp2040/dcd_rp2040.c
+index b5fa90c..519a0bf 100644
+--- a/src/portable/raspberrypi/rp2040/dcd_rp2040.c
++++ b/src/portable/raspberrypi/rp2040/dcd_rp2040.c
+@@ -29,6 +29,7 @@
+ #if CFG_TUD_ENABLED && (CFG_TUSB_MCU == OPT_MCU_RP2040) && !CFG_TUD_RPI_PIO_USB
+ 
+ #include "pico.h"
++#include "hardware/structs/watchdog.h" // GDHVC local patch: breadcrumbs
+ #include "rp2040_usb.h"
+ 
+ #if TUD_OPT_RP2040_USB_DEVICE_ENUMERATION_FIX
+@@ -67,6 +68,16 @@ static struct hw_endpoint *hw_endpoint_get_by_addr(uint8_t ep_addr)
+   return hw_endpoint_get_by_num(num, dir);
+ }
+ 
++// GDHVC local patch (see clockgen/firmware/patches/): per-endpoint DPRAM
++// allocation cache. The stock bump allocator only resets when ALL non-control
++// endpoints are closed, which never happens on a composite device (our CDC
++// endpoints stay open forever) - so every audio SET_INTERFACE open/close
++// cycle leaked one ISO buffer until hard_assert bricked the device. Endpoint
++// geometry is fixed on this device, so a re-opened endpoint simply reuses its
++// previous slot.
++static uint8_t *cached_data_buf[USB_MAX_ENDPOINTS][2];
++static uint cached_data_size[USB_MAX_ENDPOINTS][2];
++
+ static void _hw_endpoint_alloc(struct hw_endpoint *ep, uint8_t transfer_type)
+ {
+   // size must be multiple of 64
+@@ -78,12 +89,29 @@ static void _hw_endpoint_alloc(struct hw_endpoint *ep, uint8_t transfer_type)
+     size *= 2u;
+   }
+ 
+-  ep->hw_data_buf = next_buffer_ptr;
+-  next_buffer_ptr += size;
++  uint8_t const cache_num = tu_edpt_number(ep->ep_addr);
++  uint8_t const cache_dir = tu_edpt_dir(ep->ep_addr);
++  if ( cached_data_buf[cache_num][cache_dir] != NULL && cached_data_size[cache_num][cache_dir] >= size )
++  {
++    ep->hw_data_buf = cached_data_buf[cache_num][cache_dir];
++  }
++  else
++  {
++    ep->hw_data_buf = next_buffer_ptr;
++    next_buffer_ptr += size;
++    cached_data_buf[cache_num][cache_dir] = ep->hw_data_buf;
++    cached_data_size[cache_num][cache_dir] = size;
++  }
+ 
+   assert(((uintptr_t )next_buffer_ptr & 0b111111u) == 0);
+   uint dpram_offset = hw_data_offset(ep->hw_data_buf);
+-  hard_assert(hw_data_offset(next_buffer_ptr) <= USB_DPRAM_MAX);
++  if ( hw_data_offset(next_buffer_ptr) > USB_DPRAM_MAX )
++  {
++    // out of DPRAM: breadcrumb + spin so the watchdog reboots with a diagnosis
++    // instead of the stock hard_assert panic (bricked until power cycle)
++    watchdog_hw->scratch[2] = 0xC1;
++    while (1) { tight_loop_contents(); }
++  }
+ 
+   pico_info("  Allocated %d bytes at offset 0x%x (0x%p)\r\n", size, dpram_offset, ep->hw_data_buf);
+ 
+@@ -116,6 +144,9 @@ static void _hw_endpoint_close(struct hw_endpoint *ep)
+     if (reclaim_buffers)
+     {
+         next_buffer_ptr = &usb_dpram->epx_data[0];
++        // GDHVC local patch: the cached slots point into the reclaimed region
++        memset(cached_data_buf, 0, sizeof(cached_data_buf));
++        memset(cached_data_size, 0, sizeof(cached_data_size));
+     }
+ }
+ 
+@@ -240,10 +271,17 @@ static void __tusb_irq_path_func(reset_non_control_endpoints)(void)
+ 
+   // reclaim buffer space
+   next_buffer_ptr = &usb_dpram->epx_data[0];
++  // GDHVC local patch: the cached slots point into the reclaimed region
++  memset(cached_data_buf, 0, sizeof(cached_data_buf));
++  memset(cached_data_size, 0, sizeof(cached_data_size));
+ }
+ 
+ static void __tusb_irq_path_func(dcd_rp2040_irq)(void)
+ {
++  // GDHVC local patch: ISR liveness breadcrumbs in watchdog scratch[2]
++  // (0xA0 = in ISR, 0xA1 = ISR exited cleanly; distinct codes at panic sites)
++  watchdog_hw->scratch[2] = 0xA0;
++
+   uint32_t const status = usb_hw->ints;
+   uint32_t handled = 0;
+ 
+@@ -369,8 +407,12 @@ static void __tusb_irq_path_func(dcd_rp2040_irq)(void)
+ 
+   if ( status ^ handled )
+   {
+-    panic("Unhandled IRQ 0x%x\n", (uint) (status ^ handled));
++    // GDHVC local patch: mark + spin instead of panic (watchdog reboots with breadcrumb)
++    watchdog_hw->scratch[2] = 0xC0;
++    while (1) { tight_loop_contents(); }
+   }
++
++  watchdog_hw->scratch[2] = 0xA1;
+ }
+ 
+ #define USB_INTS_ERROR_BITS ( \
 diff --git a/src/portable/raspberrypi/rp2040/rp2040_usb.c b/src/portable/raspberrypi/rp2040/rp2040_usb.c
-index df05697..d7df7ce 100644
+index df05697..aae13d2 100644
 --- a/src/portable/raspberrypi/rp2040/rp2040_usb.c
 +++ b/src/portable/raspberrypi/rp2040/rp2040_usb.c
-@@ -106,10 +106,12 @@ void __tusb_irq_path_func(_hw_endpoint_buffer_control_update32)(struct hw_endpoi
+@@ -30,6 +30,7 @@
+ #if CFG_TUSB_MCU == OPT_MCU_RP2040
+ 
+ #include <stdlib.h>
++#include "hardware/structs/watchdog.h" // GDHVC local patch: breadcrumbs
+ #include "rp2040_usb.h"
+ 
+ //--------------------------------------------------------------------+
+@@ -106,9 +107,15 @@ void __tusb_irq_path_func(_hw_endpoint_buffer_control_update32)(struct hw_endpoi
      value |= or_mask;
      if ( or_mask & USB_BUF_CTRL_AVAIL )
      {
--      if ( *ep->buffer_control & USB_BUF_CTRL_AVAIL )
--      {
--        panic("ep %d %s was already available", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]);
--      }
 +      // GDHVC local patch (see clockgen/firmware/patches/): the stock driver
 +      // panics here when the buffer is already AVAIL. That state is reachable
 +      // through the unprotected worker-vs-IRQ race (hw_endpoint_lock_update is
 +      // a no-op) during rapid SET_INTERFACE alt switches on the ISO EP, and
 +      // panic() means a bricked device until power cycle. The write sequence
 +      // below already clears AVAIL first, so proceeding is a clean re-arm.
+       if ( *ep->buffer_control & USB_BUF_CTRL_AVAIL )
+       {
+-        panic("ep %d %s was already available", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]);
++        watchdog_hw->scratch[3] = 0xB1; // breadcrumb: forced re-arm taken
+       }
        *ep->buffer_control = value & ~USB_BUF_CTRL_AVAIL;
        // 12 cycle delay.. (should be good for 48*12Mhz = 576Mhz)
-       // Don't need delay in host mode as host is in charge
-@@ -338,7 +340,12 @@ bool __tusb_irq_path_func(hw_endpoint_xfer_continue)(struct hw_endpoint *ep)
+@@ -338,7 +345,13 @@ bool __tusb_irq_path_func(hw_endpoint_xfer_continue)(struct hw_endpoint *ep)
    // Part way through a transfer
    if (!ep->active)
    {
@@ -28,6 +140,7 @@ index df05697..d7df7ce 100644
 +    // can race an endpoint close from the worker (rapid SET_INTERFACE alt
 +    // switches); the stock panic() bricks the device until power cycle.
 +    // The transfer is already being torn down, so drop the event instead.
++    watchdog_hw->scratch[3] = 0xB0; // breadcrumb: drop taken
 +    hw_endpoint_lock_update(ep, -1);
 +    return false;
    }
