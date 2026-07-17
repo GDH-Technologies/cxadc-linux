@@ -44,6 +44,7 @@ rf_pid=$!
 timeout --signal=INT --kill-after=10s "$CAPTURE_SECONDS" \
   arecord -D "$CLOCK_GEN_ALSA_DEVICE" \
     -c 3 \
+    `# deliberately 3ch: this test exercises the head-switch channel` \
     -r "$ALSA_SAMPLE_RATE" \
     -f S24_3LE \
     --period-size="$ALSA_PERIOD" \

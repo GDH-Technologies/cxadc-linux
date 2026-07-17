@@ -165,7 +165,10 @@ function do_capture
 	
 	local alsa_period=12000           # about 250ms / 4-times per sec.
 	local alsa_buffer=$((ALSA_SAMPLE_RATE * 5))  # about 5 seconds of ALSA buffer
-	arecord -D "$CLOCK_GEN_ALSA_DEVICE" -c 3 -r "$ALSA_SAMPLE_RATE" -f S24_3LE --period-size=$alsa_period --buffer-size=$alsa_buffer "$file_linear_audio" 2>&1 | grep -v "Aborted by signal Interrupt" &
+	# 2 = stereo linear (default), 3 = adds the head-switch sense channel
+	# (3 is also the only layout on pre-2ch firmware)
+	local alsa_channels="${CLOCKGEN_CHANNELS:-2}"
+	arecord -D "$CLOCK_GEN_ALSA_DEVICE" -c "$alsa_channels" -r "$ALSA_SAMPLE_RATE" -f S24_3LE --period-size=$alsa_period --buffer-size=$alsa_buffer "$file_linear_audio" 2>&1 | grep -v "Aborted by signal Interrupt" &
 	pid_2=$!
 	echo "Capturing to '$file_linear_audio'"
 	

@@ -132,6 +132,34 @@ And the [PCM1802][pcm1802-product] can be clocked with a 12.288 MHz, giving the 
 In ADCs [the higher the clock jitter the worse the sampling quality][jitter-paper] will be.
 So you should avoid these sampling rates if you can and only use the ones from the integer mode PLL A.
 
+## Channel modes, idle power management, LED and the serial console
+
+The streaming interface offers two data alternate settings, selected by the host through the channel count at stream open:
+
+| arecord | alt setting | layout |
+|---------|-------------|--------|
+| `-c 2`  | 1 (default) | ch0 = ADC left, ch1 = ADC right |
+| `-c 3`  | 2           | ch0/ch1 as above, ch2 = head-switch GPIO as a full-scale square wave |
+
+If your VCR has no head-switch tap, capture with `-c 2` and the head-switch channel simply does not exist on the wire.
+Older firmware (before the alternate-setting support) only offers the 3 channel layout.
+
+The PCM1802 ADC path is powered only while a stream is open: with the stream closed (and on USB suspend), the firmware pulls the PCM1802 into power down, stops its PIO capture and gates the Si5351 CLK2 master clock, so the ADC board stays cool between recordings.
+The CXADC card clocks (CLK0/CLK1) are **never** gated — cards keep their capture clocks at all times.
+On stream open the ADC is powered up and the capture starts as soon as the ADC delivers stable clocks (typically a few tens of milliseconds); the recording simply begins at the first valid sample.
+
+The on-board LED shows the system state:
+
+| pattern | meaning |
+|---------|---------|
+| solid on | stream open, ADC capture live |
+| short blip every ~4 s | idle, ADC powered down (normal standby) |
+| ~2 Hz blink | Si5351 init failed — check the I2C wiring |
+
+The firmware also exposes a CDC ACM serial console (`/dev/ttyACM*`, any baud rate).
+It answers the line-based commands `help`, `version`, `clocks`, `power` and `status` — the latter prints the same counters as the debug dump below, in human-readable form.
+Keep ModemManager away from it with an udev rule setting `ID_MM_DEVICE_IGNORE=1` for VID/PID `1209:0001`.
+
 ## Debugging, global status and the mysterious mute switch
 
 As this project is put together from various components (main board, sub boards, etc.), quite a few things can go wrong.

@@ -29,6 +29,7 @@ function debug_mute_switch
 function short_record
 {
 	local start=$(date +%s)
+	# deliberately 3ch: matches the debug-dump decoding assumptions and works on all firmware
 	arecord -D "$alsadevice" -c 3 -r 46875 -f S24_3LE --samples=1000 "$1"
 	local e=$?
 	local end=$(date +%s)
