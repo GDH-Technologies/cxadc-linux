@@ -14,23 +14,30 @@ if (NOT PICO_SDK_PATH)
     endif()
 endif()
 
-# Apply local TinyUSB fix: the stock RP2040 dcd panics (bricking the device
-# until power cycle) when a buffer-done IRQ races an ISO endpoint close during
-# rapid SET_INTERFACE alt switches. Idempotent: skipped when already applied.
-set(TINYUSB_RACE_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/0001-rp2040-usb-no-panic-on-iso-close-race.patch")
-execute_process(
-    COMMAND git -C "${PICO_SDK_PATH}/lib/tinyusb" apply --reverse --check "${TINYUSB_RACE_PATCH}"
-    RESULT_VARIABLE TINYUSB_PATCH_ALREADY_APPLIED
-    ERROR_QUIET OUTPUT_QUIET)
-if (NOT TINYUSB_PATCH_ALREADY_APPLIED EQUAL 0)
+# Local patches applied to the pico-sdk checkout (idempotent, skipped when
+# already applied). See patches/ for what each one fixes and why.
+function(apply_local_patch target_repo patch_file)
     execute_process(
-        COMMAND git -C "${PICO_SDK_PATH}/lib/tinyusb" apply "${TINYUSB_RACE_PATCH}"
-        RESULT_VARIABLE TINYUSB_PATCH_RESULT)
-    if (NOT TINYUSB_PATCH_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to apply ${TINYUSB_RACE_PATCH} to ${PICO_SDK_PATH}/lib/tinyusb")
+        COMMAND git -C "${target_repo}" apply --reverse --check "${patch_file}"
+        RESULT_VARIABLE PATCH_ALREADY_APPLIED
+        ERROR_QUIET OUTPUT_QUIET)
+    if (NOT PATCH_ALREADY_APPLIED EQUAL 0)
+        execute_process(
+            COMMAND git -C "${target_repo}" apply "${patch_file}"
+            RESULT_VARIABLE PATCH_RESULT)
+        if (NOT PATCH_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to apply ${patch_file} to ${target_repo}")
+        endif()
+        message(STATUS "Applied ${patch_file}")
     endif()
-    message(STATUS "Applied TinyUSB rp2040 ISO close-race patch")
-endif()
+endfunction()
+
+# TinyUSB rp2040 dcd: DPRAM allocation caching + no device-bricking panics
+apply_local_patch("${PICO_SDK_PATH}/lib/tinyusb"
+    "${CMAKE_CURRENT_LIST_DIR}/patches/0001-rp2040-usb-no-panic-on-iso-close-race.patch")
+# pioasm declares cmake_minimum_required 3.4, which CMake >= 4 refuses to configure
+apply_local_patch("${PICO_SDK_PATH}"
+    "${CMAKE_CURRENT_LIST_DIR}/patches/0002-pico-sdk-pioasm-cmake4-compat.patch")
 
 # Pull in SDK (must be before project)
 include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)

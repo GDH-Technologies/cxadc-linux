@@ -30,11 +30,16 @@ sudo apt install -y git cmake make gcc g++ gcc-arm-none-eabi
 
 ## Fetch Pico SDK
 
+The firmware builds against Pico SDK **1.5.1** (pin the tag — the SDK's
+default branch is 2.x and is not compatible) and needs the SDK's TinyUSB
+submodule.
+
 Option 1 (manual clone):
 
 ```bash
 cd clockgen/firmware
-git clone --depth 1 https://github.com/raspberrypi/pico-sdk.git
+git clone --depth 1 -b 1.5.1 https://github.com/raspberrypi/pico-sdk.git
+git -C pico-sdk submodule update --init --depth 1 lib/tinyusb
 ```
 
 Option 2 (helper script):
@@ -52,7 +57,7 @@ Use an out-of-source build directory.
 
 ```bash
 cd clockgen/firmware
-export PICO_SDK_PATH="$(pwd)/pico-sdk"
+export PICO_SDK_PATH="$(pwd)/pico-sdk"   # optional when the SDK lives at firmware/pico-sdk
 cmake -S . -B build
 cmake --build build --parallel
 ```
@@ -60,13 +65,29 @@ cmake --build build --parallel
 Expected artifact:
 - firmware UF2 at firmware/build/build/firmware.uf2
 
+Notes:
+- At configure time, CMake applies the fixes in firmware/patches/ to the SDK
+  checkout (idempotent). This requires the SDK to be a git checkout, which
+  both fetch options above produce. The patches fix device-bricking bugs in
+  the SDK's RP2040 USB driver and make the bundled pioasm configure under
+  CMake >= 4.
+- Older checkouts of this repo (before firmware/patches/ existed) fail to
+  configure with CMake >= 4 ("Compatibility with CMake < 3.5 has been
+  removed" from the pioasm sub-build). Workaround there:
+  `export CMAKE_POLICY_VERSION_MINIMUM=3.5` before building.
+
 ## Flash to Raspberry Pi Pico
+
+First flash (blank Pico, or firmware without the serial console):
 
 1. Hold BOOTSEL on the Pico.
 2. Connect USB.
 3. Release BOOTSEL when the RPI-RP2 mass-storage device appears.
-4. Copy firmware/build/firmware.uf2 onto the mounted device.
-	In the current layout, this file is generated as firmware/build/build/firmware.uf2.
+4. Copy firmware/build/build/firmware.uf2 onto the mounted device.
+
+Reflash (firmware with the serial console, no button needed): send
+`bootsel` to the device's CDC serial console (`/dev/ttyACM*`) — it reboots
+into the RPI-RP2 mass-storage bootloader — then copy the UF2 as above.
 
 ## Validate Integration Quickly
 
