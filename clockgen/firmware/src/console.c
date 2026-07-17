@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "pico/bootrom.h"
+#include "hardware/watchdog.h"
 #include "tusb.h"
 #include "console.h"
 #include "build_info.h"
@@ -51,6 +53,8 @@ static void cmd_help()
 	put_line("  clocks   clock generator configuration");
 	put_line("  power    ADC power / stream state");
 	put_line("  status   global status counters");
+	put_line("  reboot   restart the firmware");
+	put_line("  bootsel  reboot into the UF2 bootloader (for flashing)");
 }
 
 static void cmd_version()
@@ -127,6 +131,18 @@ static void dispatch_line(const char* line)
 		cmd_power();
 	else if( strcmp(line, "status") == 0 )
 		cmd_status();
+	else if( strcmp(line, "reboot") == 0 )
+	{
+		put_line("rebooting");
+		tud_cdc_write_flush();
+		watchdog_reboot(0, 0, 100);
+	}
+	else if( strcmp(line, "bootsel") == 0 )
+	{
+		put_line("rebooting into BOOTSEL");
+		tud_cdc_write_flush();
+		reset_usb_boot(0, 0);
+	}
 	else if( line[0] != 0 )
 		put_line("?"); // unknown input (tolerates e.g. ModemManager AT probes)
 

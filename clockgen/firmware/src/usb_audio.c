@@ -283,15 +283,18 @@ static void next_buffer()
 
 bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t func_id, uint8_t ep_in, uint8_t cur_alt_setting)
 {
+	wdt_trace_core0(WDT_TRACE0_TX_DONE);
 	next_buffer();
 
 	if(audio_buffer == NULL)
 	{
+		wdt_trace_core0(WDT_TRACE0_TX_DONE_DONE);
 		return true;
 	}
 
 	uint16_t remain = audio_buffer->len - off;
 	off += tud_audio_write(audio_buffer->data + off, remain);
+	wdt_trace_core0(WDT_TRACE0_TX_DONE_DONE);
 	return true;
 }
 

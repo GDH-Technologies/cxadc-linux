@@ -60,8 +60,12 @@ int main(void)
 
 	while (true)
 	{
+		wdt_trace_core0(WDT_TRACE0_LOOP_TOP);
+
 		// tinyusb device task
 		tud_task();
+
+		wdt_trace_core0(WDT_TRACE0_AFTER_TUD);
 
 		// serial console on the CDC interface
 		console_task();

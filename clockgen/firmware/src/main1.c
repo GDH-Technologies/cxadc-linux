@@ -12,6 +12,7 @@
 #include "head_switch.h"
 #include "global_status.h"
 #include "adc_power.h"
+#include "wdt_trace.h"
 
 // The exact value does not matter, it just has to be large enough to not run out
 // between two regular sample values. With the DMA capture path samples arrive in
@@ -122,6 +123,7 @@ void main1()
 	while(1)
 	{
 		++main1_heartbeat; // core-liveness signal for the watchdog (see wdt_trace.c)
+		wdt_trace_core1(WDT_TRACE1_LOOP_TOP);
 
 		bool want_adc = adc_power_requested();
 
@@ -129,27 +131,33 @@ void main1()
 		{
 			pcm1802_start();
 			adc_running = true;
+			wdt_trace_core1(WDT_TRACE1_STATUS_LOCK);
 			global_status_access(
 			{
 				global_status.adc_powered = true_u8;
 				global_status.adc_power_cycles += 1;
 			});
+			wdt_trace_core1(WDT_TRACE1_LOOP_TOP);
 		}
 
 		if( !want_adc && adc_running )
 		{
 			pcm1802_stop();
 			adc_running = false;
+			wdt_trace_core1(WDT_TRACE1_STATUS_LOCK);
 			global_status_access( global_status.adc_powered = false_u8 );
+			wdt_trace_core1(WDT_TRACE1_LOOP_TOP);
 		}
 
 		// with the ADC parked there is nothing to produce, unless the host wants debug dumps
 		if( !adc_running && fifo_get_mode() == fifo_mode_normal )
 		{
+			wdt_trace_core1(WDT_TRACE1_PARKED);
 			sleep_ms(1);
 			continue;
 		}
 
+		wdt_trace_core1(WDT_TRACE1_TAKE_EMPTY);
 		usb_audio_buffer* buffer = fifo_try_take_empty();
 		if( buffer == NULL )
 		{
@@ -158,7 +166,11 @@ void main1()
 			continue;
 		}
 
-		if( fill_buffer(buffer) )
+		wdt_trace_core1(WDT_TRACE1_FILLING);
+		bool filled = fill_buffer(buffer);
+		wdt_trace_core1(WDT_TRACE1_FILL_DONE);
+
+		if( filled )
 			fifo_put_filled(buffer);
 		else
 			fifo_put_empty(buffer); // timed out (e.g. ADC clocks stopped), re-check power state
