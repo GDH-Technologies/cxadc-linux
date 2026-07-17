@@ -19,6 +19,7 @@
 #include "usb_descriptors.h"
 #include "global_status.h"
 #include "adc_power.h"
+#include "console.h"
 
 int main(void)
 {
@@ -59,6 +60,9 @@ int main(void)
 	{
 		// tinyusb device task
 		tud_task();
+
+		// serial console on the CDC interface
+		console_task();
 
 		// t is now roughly in 250 ms
 		uint32_t t = time_us_32() >> 18;

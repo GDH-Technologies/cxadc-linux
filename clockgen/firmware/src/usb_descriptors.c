@@ -67,6 +67,9 @@ char const* string_desc_arr [] =
 	"CXADC-Clock 0 Out",
 	#define STRD_IDX_OUT_1          14
 	"CXADC-Clock 1 Out",
+
+	#define STRD_IDX_CONSOLE        15
+	"Console",
 };
 
 #define STRING_DESCRIPTOR_BUFFER 32
@@ -172,10 +175,17 @@ uint8_t const * tud_descriptor_device_cb(void)
 
 enum
 {
+	// audio first, so the ALSA card identity and alt setting numbering are unaffected by the CDC console
 	ITF_NUM_AUDIO_CONTROL = 0,
 	ITF_NUM_AUDIO_STREAMING,
+	ITF_NUM_CDC,
+	ITF_NUM_CDC_DATA,
 	ITF_NUM_TOTAL
 };
+
+#define EPNUM_CDC_NOTIF 0x82
+#define EPNUM_CDC_OUT   0x02
+#define EPNUM_CDC_IN    0x83
 
 #define AUDIO_TERM_TYPE_IO_EMBEDDED_UNDEFINED  0x0700
 #define AUDIO_TERM_TYPE_IN_EXTERNAL_LINE       0x0603
@@ -184,7 +194,7 @@ enum
 uint8_t const desc_configuration[] =
 {
 	// Interface count, string index, total length, attribute, power in mA
-	TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, (TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * TUD_AUDIO_DESC_TOTAL_LEN), 0x00, 100),
+	TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, (TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * TUD_AUDIO_DESC_TOTAL_LEN + CFG_TUD_CDC * TUD_CDC_DESC_LEN), 0x00, 100),
 	
 	/* Standard Interface Association Descriptor (IAD) */\
 	TUD_AUDIO_DESC_IAD(/*_firstitfs*/ ITF_NUM_AUDIO_CONTROL, /*_nitfs*/ 0x02, /*_stridx*/ STRD_IDX_VERSION),\
@@ -242,11 +252,14 @@ uint8_t const desc_configuration[] =
 			/* Standard AS Isochronous Audio Data Endpoint Descriptor(4.10.1.1) */\
 			TUD_AUDIO_DESC_STD_AS_ISO_EP(/*_ep*/ (0x80 | EPNUM_AUDIO), /*_attr*/ (TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA), /*_maxEPsize*/ CFG_TUD_AUDIO_EP_SZ_IN, /*_interval*/ (CFG_TUSB_RHPORT0_MODE & OPT_MODE_HIGH_SPEED) ? 0x08 : 0x01),\
 				/* Class-Specific AS Isochronous Audio Data Endpoint Descriptor(4.10.1.2) */\
-				TUD_AUDIO_DESC_CS_AS_ISO_EP(/*_attr*/ AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, /*_ctrl*/ AUDIO_CTRL_NONE, /*_lockdelayunit*/ AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, /*_lockdelay*/ 0x0000)
+				TUD_AUDIO_DESC_CS_AS_ISO_EP(/*_attr*/ AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, /*_ctrl*/ AUDIO_CTRL_NONE, /*_lockdelayunit*/ AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, /*_lockdelay*/ 0x0000),\
+
+	/* CDC ACM serial console (includes its own IAD) */\
+	TUD_CDC_DESCRIPTOR(/*_itfnum*/ ITF_NUM_CDC, /*_stridx*/ STRD_IDX_CONSOLE, /*_ep_notif*/ EPNUM_CDC_NOTIF, /*_ep_notif_size*/ 8, /*_epout*/ EPNUM_CDC_OUT, /*_epin*/ EPNUM_CDC_IN, /*_epsize*/ CFG_TUD_CDC_EP_BUFSIZE)
 };
 
 // The hand-maintained length macros above must match the actual descriptor, or the host sees a truncated/garbage config
-static_assert( sizeof(desc_configuration) == (TUD_CONFIG_DESC_LEN + TUD_AUDIO_DESC_TOTAL_LEN), "descriptor length macros out of sync with desc_configuration" );
+static_assert( sizeof(desc_configuration) == (TUD_CONFIG_DESC_LEN + TUD_AUDIO_DESC_TOTAL_LEN + TUD_CDC_DESC_LEN), "descriptor length macros out of sync with desc_configuration" );
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor
