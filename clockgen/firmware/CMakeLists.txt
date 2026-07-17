@@ -14,6 +14,24 @@ if (NOT PICO_SDK_PATH)
     endif()
 endif()
 
+# Apply local TinyUSB fix: the stock RP2040 dcd panics (bricking the device
+# until power cycle) when a buffer-done IRQ races an ISO endpoint close during
+# rapid SET_INTERFACE alt switches. Idempotent: skipped when already applied.
+set(TINYUSB_RACE_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/0001-rp2040-usb-no-panic-on-iso-close-race.patch")
+execute_process(
+    COMMAND git -C "${PICO_SDK_PATH}/lib/tinyusb" apply --reverse --check "${TINYUSB_RACE_PATCH}"
+    RESULT_VARIABLE TINYUSB_PATCH_ALREADY_APPLIED
+    ERROR_QUIET OUTPUT_QUIET)
+if (NOT TINYUSB_PATCH_ALREADY_APPLIED EQUAL 0)
+    execute_process(
+        COMMAND git -C "${PICO_SDK_PATH}/lib/tinyusb" apply "${TINYUSB_RACE_PATCH}"
+        RESULT_VARIABLE TINYUSB_PATCH_RESULT)
+    if (NOT TINYUSB_PATCH_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to apply ${TINYUSB_RACE_PATCH} to ${PICO_SDK_PATH}/lib/tinyusb")
+    endif()
+    message(STATUS "Applied TinyUSB rp2040 ISO close-race patch")
+endif()
+
 # Pull in SDK (must be before project)
 include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 

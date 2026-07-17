@@ -1,0 +1,35 @@
+diff --git a/src/portable/raspberrypi/rp2040/rp2040_usb.c b/src/portable/raspberrypi/rp2040/rp2040_usb.c
+index df05697..d7df7ce 100644
+--- a/src/portable/raspberrypi/rp2040/rp2040_usb.c
++++ b/src/portable/raspberrypi/rp2040/rp2040_usb.c
+@@ -106,10 +106,12 @@ void __tusb_irq_path_func(_hw_endpoint_buffer_control_update32)(struct hw_endpoi
+     value |= or_mask;
+     if ( or_mask & USB_BUF_CTRL_AVAIL )
+     {
+-      if ( *ep->buffer_control & USB_BUF_CTRL_AVAIL )
+-      {
+-        panic("ep %d %s was already available", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]);
+-      }
++      // GDHVC local patch (see clockgen/firmware/patches/): the stock driver
++      // panics here when the buffer is already AVAIL. That state is reachable
++      // through the unprotected worker-vs-IRQ race (hw_endpoint_lock_update is
++      // a no-op) during rapid SET_INTERFACE alt switches on the ISO EP, and
++      // panic() means a bricked device until power cycle. The write sequence
++      // below already clears AVAIL first, so proceeding is a clean re-arm.
+       *ep->buffer_control = value & ~USB_BUF_CTRL_AVAIL;
+       // 12 cycle delay.. (should be good for 48*12Mhz = 576Mhz)
+       // Don't need delay in host mode as host is in charge
+@@ -338,7 +340,12 @@ bool __tusb_irq_path_func(hw_endpoint_xfer_continue)(struct hw_endpoint *ep)
+   // Part way through a transfer
+   if (!ep->active)
+   {
+-    panic("Can't continue xfer on inactive ep %d %s", tu_edpt_number(ep->ep_addr), ep_dir_string[tu_edpt_dir(ep->ep_addr)]);
++    // GDHVC local patch (see clockgen/firmware/patches/): a buffer-done IRQ
++    // can race an endpoint close from the worker (rapid SET_INTERFACE alt
++    // switches); the stock panic() bricks the device until power cycle.
++    // The transfer is already being torn down, so drop the event instead.
++    hw_endpoint_lock_update(ep, -1);
++    return false;
+   }
+ 
+   // Update EP struct from hardware state
