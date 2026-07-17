@@ -20,6 +20,7 @@
 #include "global_status.h"
 #include "adc_power.h"
 #include "console.h"
+#include "wdt_trace.h"
 
 int main(void)
 {
@@ -30,6 +31,7 @@ int main(void)
 	gpio_put(led_pin, 1);
 	dbg_init();
 	global_status_init();
+	wdt_trace_init();
 	// so the most basic init is done, turn off LED until we are through with the rest
 	gpio_put(led_pin, 0);
 
@@ -63,6 +65,9 @@ int main(void)
 
 		// serial console on the CDC interface
 		console_task();
+
+		// pet the watchdog while both cores are alive
+		wdt_trace_task();
 
 		// t is now roughly in 250 ms
 		uint32_t t = time_us_32() >> 18;

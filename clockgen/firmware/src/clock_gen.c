@@ -3,6 +3,7 @@
 
 #include "dbg.h"
 #include "clock_gen.h"
+#include "wdt_trace.h"
 
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
@@ -195,7 +196,9 @@ void clock_gen_adc_clock_enable(bool enabled)
 	if( not_initialized() )
 		return;
 
+	wdt_trace_core0(WDT_TRACE0_ADC_CLK_I2C);
 	si5351_enable_output(2, enabled);
+	wdt_trace_core0(WDT_TRACE0_ADC_CLK_DONE);
 
 	dbg_say("adc clk ");
 	dbg_say(enabled ? "on\n" : "off\n");
@@ -233,25 +236,29 @@ void clock_gen_set_adc_sample_rate(uint32_t rate_hz)
 {
 	if( not_initialized() )
 		return;
-	
+
+	wdt_trace_core0(WDT_TRACE0_RATE_I2C);
 	dbg_say("adc=");
 	
 	if( adc_rate_12m288hz == rate_hz)
 	{
 		ouput2 = set_multisynth(ouput2, &setup_12m288hz, 2);
 		dbg_say(xstr(adc_rate_12m288hz) "\n");
+		wdt_trace_core0(WDT_TRACE0_RATE_I2C_DONE);
 		return;
 	}
-	
+
 	if( adc_rate_12mhz == rate_hz)
 	{
 		ouput2 = set_multisynth(ouput2, &setup_12mhz, 2);
 		dbg_say(xstr(adc_rate_12mhz) "\n");
+		wdt_trace_core0(WDT_TRACE0_RATE_I2C_DONE);
 		return;
 	}
-	
+
 	dbg_u32(rate_hz);
 	dbg_say("???\n");
+	wdt_trace_core0(WDT_TRACE0_RATE_I2C_DONE);
 }
 
 #undef str

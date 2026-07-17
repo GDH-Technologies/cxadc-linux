@@ -108,6 +108,8 @@ static bool fill_buffer(usb_audio_buffer* buffer)
 	return fill_buffer_normal( buffer );
 }
 
+volatile uint32_t main1_heartbeat = 0;
+
 void main1()
 {
 	dbg_say("main1()\n");
@@ -119,6 +121,8 @@ void main1()
 
 	while(1)
 	{
+		++main1_heartbeat; // core-liveness signal for the watchdog (see wdt_trace.c)
+
 		bool want_adc = adc_power_requested();
 
 		if( want_adc && !adc_running )

@@ -8,5 +8,8 @@
 
 void main1();
 
+// increments once per core1 main-loop iteration, watched by wdt_trace on core0
+extern volatile uint32_t main1_heartbeat;
+
 #endif
 

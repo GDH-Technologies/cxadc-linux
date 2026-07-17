@@ -46,6 +46,12 @@ typedef struct __attribute__((packed))
 	uint8_t   usb_alt_setting;
 	// number of times the ADC has been powered up since boot
 	uint32_t  adc_power_cycles;
+
+	// true if this boot was caused by the hardware watchdog (a core hung)
+	bool_u8   wdt_rebooted;
+	// last breadcrumb each core dropped before the watchdog reboot (see wdt_trace.h)
+	uint8_t   wdt_trace_core0;
+	uint8_t   wdt_trace_core1;
 }
 global_status_fields;
 

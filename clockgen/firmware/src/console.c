@@ -110,6 +110,9 @@ static void cmd_status()
 	put_kv_u32("adc_powered", snapshot.adc_powered);
 	put_kv_u32("usb_alt_setting", snapshot.usb_alt_setting);
 	put_kv_u32("adc_power_cycles", snapshot.adc_power_cycles);
+	put_kv_u32("wdt_rebooted", snapshot.wdt_rebooted);
+	put_kv_u32("wdt_trace_core0", snapshot.wdt_trace_core0);
+	put_kv_u32("wdt_trace_core1", snapshot.wdt_trace_core1);
 }
 
 static void dispatch_line(const char* line)

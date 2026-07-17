@@ -9,6 +9,7 @@
 #include "hardware/dma.h"
 #include "hardware/irq.h"
 #include "usb_audio_format.h"
+#include "wdt_trace.h"
 
 // see also https://www.pjrc.com/pcm1802-breakout-board-needs-hack/
 #define PCM1802_POWER_DOWN_PIN 17
@@ -180,6 +181,7 @@ void pcm1802_init()
 
 void pcm1802_start()
 {
+	wdt_trace_core1(WDT_TRACE1_PCM_START);
 	// re-enter the PIO program at its first instruction with clean FIFOs, so every
 	// power-up acquires the L/R phase the same way a cold boot does
 	pio_sm_set_enabled(pio, pio_sm, false);
@@ -201,19 +203,23 @@ void pcm1802_start()
 	pio_sm_set_enabled(pio, pio_sm, true);
 	gpio_put(PCM1802_POWER_DOWN_PIN, 1);
 	dbg_say("pcm1802_start\n");
+	wdt_trace_core1(WDT_TRACE1_PCM_START_DONE);
 }
 
 void pcm1802_stop()
 {
+	wdt_trace_core1(WDT_TRACE1_PCM_STOP);
 	gpio_put(PCM1802_POWER_DOWN_PIN, 0);
 	// no DREQs once the state machine is off, so both channels stop cleanly
 	pio_sm_set_enabled(pio, pio_sm, false);
+	wdt_trace_core1(WDT_TRACE1_DMA_ABORT);
 	dma_channel_abort(dma_ch[0]);
 	dma_channel_abort(dma_ch[1]);
 	dma_channel_acknowledge_irq1(dma_ch[0]);
 	dma_channel_acknowledge_irq1(dma_ch[1]);
 	pio_sm_clear_fifos(pio, pio_sm);
 	dbg_say("pcm1802_stop\n");
+	wdt_trace_core1(WDT_TRACE1_PCM_STOP_DONE);
 }
 
 

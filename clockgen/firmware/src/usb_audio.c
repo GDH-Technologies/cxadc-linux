@@ -10,6 +10,7 @@
 #include "clock_gen.h"
 #include "adc_power.h"
 #include "global_status.h"
+#include "wdt_trace.h"
 #include "dbg.h"
 
 //--------------------------------------------------------------------+
@@ -298,6 +299,7 @@ bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t func_id, uint8_t ep_i
 bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const * p_request)
 {
 	(void) rhport;
+	wdt_trace_core0(WDT_TRACE0_SET_ITF);
 
 	uint8_t alt = TU_U16_LOW(p_request->wValue);
 	usb_audio_active_alt = alt;
@@ -312,6 +314,7 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const * p_reque
 	dbg_say("set_itf alt ");
 	dbg_u8(alt);
 	dbg_say("\n");
+	wdt_trace_core0(WDT_TRACE0_SET_ITF_DONE);
 	return true;
 }
 
@@ -319,6 +322,7 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport, tusb_control_request_t const 
 {
 	(void) rhport;
 	(void) p_request;
+	wdt_trace_core0(WDT_TRACE0_CLOSE_EP);
 
 	usb_audio_active_alt = 0;
 	release_current_buffer();
@@ -327,5 +331,6 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport, tusb_control_request_t const 
 	global_status_access( global_status.usb_alt_setting = 0 );
 
 	dbg_say("close_EP\n");
+	wdt_trace_core0(WDT_TRACE0_CLOSE_EP_DONE);
 	return true;
 }

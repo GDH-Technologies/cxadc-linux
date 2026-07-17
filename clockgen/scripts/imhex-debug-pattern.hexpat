@@ -26,4 +26,10 @@ struct debug_info {
 	u8 usb_alt_setting;
 	// number of times the ADC has been powered up since boot
 	le u32 adc_power_cycles;
+
+	// true if this boot was caused by the hardware watchdog (a core hung)
+	u8 wdt_rebooted;
+	// last breadcrumb each core dropped before the watchdog reboot (see wdt_trace.h)
+	u8 wdt_trace_core0;
+	u8 wdt_trace_core1;
 };
