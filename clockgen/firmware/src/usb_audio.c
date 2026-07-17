@@ -232,35 +232,81 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport, tusb_control_request_t const * 
 	return false; // Not implemented
 }
 
+volatile uint8_t usb_audio_active_alt = 0;
+
+uint8_t usb_audio_active_channels()
+{
+	return (usb_audio_active_alt == 2) ? 3 : 2;
+}
+
 static uint16_t off = 0;
 static usb_audio_buffer* audio_buffer = NULL;
+
+static void release_current_buffer()
+{
+	if( audio_buffer != NULL )
+	{
+		fifo_put_empty(audio_buffer);
+		audio_buffer = NULL;
+	}
+	off = 0;
+}
 
 static void next_buffer()
 {
 	if( audio_buffer != NULL)
 	{
-		if( off < USB_AUDIO_PAYLOAD_SIZE )
+		if( off < audio_buffer->len )
 			return;
-		
+
+		release_current_buffer();
+	}
+
+	off = 0;
+
+	while( (audio_buffer = fifo_try_take_filled()) != NULL )
+	{
+		// Debug dumps pass through as-is. For PCM, a buffer filled for a different
+		// alternate setting (core1 was mid-fill during the switch) would shift the
+		// host's frame alignment for the rest of the stream, so drop it.
+		if( fifo_get_mode() == fifo_mode_debug )
+			break;
+		if( audio_buffer->len == USB_AUDIO_PAYLOAD_SIZE_FOR(usb_audio_active_channels()) )
+			break;
+
 		fifo_put_empty(audio_buffer);
 	}
-	
-	off = 0;
-	
-	audio_buffer = fifo_try_take_filled();
 }
 
 bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t func_id, uint8_t ep_in, uint8_t cur_alt_setting)
 {
 	next_buffer();
-	
+
 	if(audio_buffer == NULL)
 	{
 		return true;
 	}
-	
-	uint16_t remain = USB_AUDIO_PAYLOAD_SIZE - off; 
+
+	uint16_t remain = audio_buffer->len - off;
 	off += tud_audio_write(audio_buffer->data + off, remain);
+	return true;
+}
+
+// Invoked on SET_INTERFACE for a non-zero (data streaming) alternate setting, after the EP was opened
+bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const * p_request)
+{
+	(void) rhport;
+
+	uint8_t alt = TU_U16_LOW(p_request->wValue);
+	usb_audio_active_alt = alt;
+
+	// A fresh stream should not begin with audio from the previous session
+	release_current_buffer();
+	fifo_flush_filled();
+
+	dbg_say("set_itf alt ");
+	dbg_u8(alt);
+	dbg_say("\n");
 	return true;
 }
 
@@ -268,6 +314,9 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport, tusb_control_request_t const 
 {
 	(void) rhport;
 	(void) p_request;
+
+	usb_audio_active_alt = 0;
+	release_current_buffer();
 
 	dbg_say("close_EP\n");
 	return true;

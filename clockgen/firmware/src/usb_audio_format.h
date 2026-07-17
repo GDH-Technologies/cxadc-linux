@@ -12,12 +12,18 @@
 //   This will result in polling slightly faster than packets are being produced, and so we will never overflow our buffer.
 #define USB_AUDIO_SAMPLES_PER_BUFFER 64
 #define USB_AUDIO_BYTES_PER_SAMPLE   3
-#define USB_AUDIO_CHANNELS           3
-#define USB_AUDIO_PAYLOAD_SIZE       (USB_AUDIO_BYTES_PER_SAMPLE * USB_AUDIO_CHANNELS * USB_AUDIO_SAMPLES_PER_BUFFER)
+// The streaming interface offers two data alternate settings:
+//   alt 1 -> 2 channels (ADC L/R), alt 2 -> 3 channels (ADC L/R + head switch).
+// Buffers are sized for the worst case, the valid payload length is tracked per buffer.
+#define USB_AUDIO_CHANNELS_MAX       3
+#define USB_AUDIO_PAYLOAD_SIZE_FOR(channels) (USB_AUDIO_BYTES_PER_SAMPLE * (channels) * USB_AUDIO_SAMPLES_PER_BUFFER)
+#define USB_AUDIO_PAYLOAD_SIZE_MAX   USB_AUDIO_PAYLOAD_SIZE_FOR(USB_AUDIO_CHANNELS_MAX)
 
 typedef struct
 {
-	uint8_t data[USB_AUDIO_PAYLOAD_SIZE];
+	// number of valid bytes in data, set by whoever fills the buffer
+	uint16_t len;
+	uint8_t data[USB_AUDIO_PAYLOAD_SIZE_MAX];
 } usb_audio_buffer;
 
 #define USB_AUDIO_PCM24_MAX  0x007fffff

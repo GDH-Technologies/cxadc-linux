@@ -216,11 +216,11 @@ uint8_t const desc_configuration[] =
 		/* Interface 1, Alternate 0 - default alternate setting with 0 bandwidth */\
 		TUD_AUDIO_DESC_STD_AS_INT(/*_itfnum*/ ITF_NUM_AUDIO_STREAMING, /*_altset*/ 0x00, /*_nEPs*/ 0x00, /*_stridx*/ 0x00),\
 		/* Standard AS Interface Descriptor(4.9.1) */\
-		/* Interface 1, Alternate 1 - alternate interface for data streaming */\
+		/* Interface 1, Alternate 1 - data streaming, 2 channels (ADC L/R) */\
 		TUD_AUDIO_DESC_STD_AS_INT(/*_itfnum*/ ITF_NUM_AUDIO_STREAMING, /*_altset*/ 0x01, /*_nEPs*/ 0x01, /*_stridx*/ 0x00),\
-	
+
 			/* Class-Specific AS Interface Descriptor(4.9.2) */\
-			TUD_AUDIO_DESC_CS_AS_INT(/*_termid*/ USB_DESCRIPTORS_ID_OUTPUT, /*_ctrl*/ AUDIO_CTRL_NONE, /*_formattype*/ AUDIO_FORMAT_TYPE_I, /*_formats*/ AUDIO_DATA_FORMAT_TYPE_I_PCM, /*_nchannelsphysical*/ CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX, /*_channelcfg*/ AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, /*_stridx*/ 0x00),\
+			TUD_AUDIO_DESC_CS_AS_INT(/*_termid*/ USB_DESCRIPTORS_ID_OUTPUT, /*_ctrl*/ AUDIO_CTRL_NONE, /*_formattype*/ AUDIO_FORMAT_TYPE_I, /*_formats*/ AUDIO_DATA_FORMAT_TYPE_I_PCM, /*_nchannelsphysical*/ 2, /*_channelcfg*/ AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, /*_stridx*/ 0x00),\
 			/* Type I Format Type Descriptor(2.3.1.6 - Audio Formats) */\
 			TUD_AUDIO_DESC_TYPE_I_FORMAT(USB_AUDIO_BYTES_PER_SAMPLE, (USB_AUDIO_BYTES_PER_SAMPLE*8)),\
 
@@ -228,8 +228,25 @@ uint8_t const desc_configuration[] =
 			/* Standard AS Isochronous Audio Data Endpoint Descriptor(4.10.1.1) */\
 			TUD_AUDIO_DESC_STD_AS_ISO_EP(/*_ep*/ (0x80 | EPNUM_AUDIO), /*_attr*/ (TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA), /*_maxEPsize*/ CFG_TUD_AUDIO_EP_SZ_IN, /*_interval*/ (CFG_TUSB_RHPORT0_MODE & OPT_MODE_HIGH_SPEED) ? 0x08 : 0x01),\
 				/* Class-Specific AS Isochronous Audio Data Endpoint Descriptor(4.10.1.2) */\
+				TUD_AUDIO_DESC_CS_AS_ISO_EP(/*_attr*/ AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, /*_ctrl*/ AUDIO_CTRL_NONE, /*_lockdelayunit*/ AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, /*_lockdelay*/ 0x0000),\
+
+		/* Standard AS Interface Descriptor(4.9.1) */\
+		/* Interface 1, Alternate 2 - data streaming, 3 channels (ADC L/R + head switch) */\
+		TUD_AUDIO_DESC_STD_AS_INT(/*_itfnum*/ ITF_NUM_AUDIO_STREAMING, /*_altset*/ 0x02, /*_nEPs*/ 0x01, /*_stridx*/ 0x00),\
+
+			/* Class-Specific AS Interface Descriptor(4.9.2) */\
+			TUD_AUDIO_DESC_CS_AS_INT(/*_termid*/ USB_DESCRIPTORS_ID_OUTPUT, /*_ctrl*/ AUDIO_CTRL_NONE, /*_formattype*/ AUDIO_FORMAT_TYPE_I, /*_formats*/ AUDIO_DATA_FORMAT_TYPE_I_PCM, /*_nchannelsphysical*/ 3, /*_channelcfg*/ AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, /*_stridx*/ 0x00),\
+			/* Type I Format Type Descriptor(2.3.1.6 - Audio Formats) */\
+			TUD_AUDIO_DESC_TYPE_I_FORMAT(USB_AUDIO_BYTES_PER_SAMPLE, (USB_AUDIO_BYTES_PER_SAMPLE*8)),\
+
+			/* Standard AS Isochronous Audio Data Endpoint Descriptor(4.10.1.1) */\
+			TUD_AUDIO_DESC_STD_AS_ISO_EP(/*_ep*/ (0x80 | EPNUM_AUDIO), /*_attr*/ (TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA), /*_maxEPsize*/ CFG_TUD_AUDIO_EP_SZ_IN, /*_interval*/ (CFG_TUSB_RHPORT0_MODE & OPT_MODE_HIGH_SPEED) ? 0x08 : 0x01),\
+				/* Class-Specific AS Isochronous Audio Data Endpoint Descriptor(4.10.1.2) */\
 				TUD_AUDIO_DESC_CS_AS_ISO_EP(/*_attr*/ AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, /*_ctrl*/ AUDIO_CTRL_NONE, /*_lockdelayunit*/ AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, /*_lockdelay*/ 0x0000)
 };
+
+// The hand-maintained length macros above must match the actual descriptor, or the host sees a truncated/garbage config
+static_assert( sizeof(desc_configuration) == (TUD_CONFIG_DESC_LEN + TUD_AUDIO_DESC_TOTAL_LEN), "descriptor length macros out of sync with desc_configuration" );
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor

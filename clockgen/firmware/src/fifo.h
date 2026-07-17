@@ -21,6 +21,9 @@ usb_audio_buffer* fifo_take_filled();
 usb_audio_buffer* fifo_try_take_filled();
 void              fifo_put_filled(usb_audio_buffer* buffer);
 
+// moves all currently filled buffers back to the empty queue (used on stream open to drop stale data)
+void              fifo_flush_filled();
+
 
 // control / comunicates what kind of data is expected to be filled in the packets
 typedef enum

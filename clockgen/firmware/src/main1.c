@@ -7,6 +7,7 @@
 #include "main1.h"
 #include "fifo.h"
 #include "usb_audio_format.h"
+#include "usb_audio.h"
 #include "pcm1802.h"
 #include "head_switch.h"
 #include "global_status.h"
@@ -17,10 +18,13 @@
 
 static bool fill_buffer_normal(usb_audio_buffer* buffer)
 {
+	// sampled once per buffer so all frames in it have a consistent stride
+	const uint32_t channels = usb_audio_active_channels();
+
 	for(int i=0; i<USB_AUDIO_SAMPLES_PER_BUFFER; ++i)
 	{
-		uint8_t* current_frame = buffer->data + ( i * USB_AUDIO_CHANNELS * USB_AUDIO_BYTES_PER_SAMPLE );
-		uint32_t tmo = 0; 
+		uint8_t* current_frame = buffer->data + ( i * channels * USB_AUDIO_BYTES_PER_SAMPLE );
+		uint32_t tmo = 0;
 
 		// left goes into ch0, right into ch1
 		while( pcm1802_try_rx_24bit_uac_pcm_type1(current_frame, current_frame + USB_AUDIO_BYTES_PER_SAMPLE ) == false)
@@ -33,10 +37,15 @@ static bool fill_buffer_normal(usb_audio_buffer* buffer)
 			}
 		}
 
-		// head switch / sync pin goes into ch2
-		uint32_t pin_pcm_value = head_switch_sample_pin() ? USB_AUDIO_PCM24_MAX : USB_AUDIO_PCM24_MIN;
-		usb_audio_pcm24_host_to_usb(current_frame + (2*USB_AUDIO_BYTES_PER_SAMPLE), pin_pcm_value);
+		if( channels >= 3 )
+		{
+			// head switch / sync pin goes into ch2
+			uint32_t pin_pcm_value = head_switch_sample_pin() ? USB_AUDIO_PCM24_MAX : USB_AUDIO_PCM24_MIN;
+			usb_audio_pcm24_host_to_usb(current_frame + (2*USB_AUDIO_BYTES_PER_SAMPLE), pin_pcm_value);
+		}
 	}
+
+	buffer->len = USB_AUDIO_PAYLOAD_SIZE_FOR(channels);
 	
 	global_status_access(
 	{
@@ -55,17 +64,18 @@ static bool fill_buffer_normal(usb_audio_buffer* buffer)
 
 static bool fill_buffer_debug(usb_audio_buffer* buffer)
 {
-	memset(buffer->data, 0, USB_AUDIO_PAYLOAD_SIZE);
-	
+	memset(buffer->data, 0, USB_AUDIO_PAYLOAD_SIZE_MAX);
+	buffer->len = USB_AUDIO_PAYLOAD_SIZE_MAX;
+
 	int off = 0;
-	
+
 	uint32_t header = GLOBAL_STATUS_MAGIC_NUMBER;
 	memcpy( (buffer->data) + off, &header, sizeof(uint32_t) );
 	off += sizeof(uint32_t);
-	
+
 	// Make sure our status structure actually fits in one frame (it really should but just to be safe)
 	int size = sizeof(global_status_fields);
-	int left = USB_AUDIO_PAYLOAD_SIZE - off;
+	int left = USB_AUDIO_PAYLOAD_SIZE_MAX - off;
 	if( size > left)
 		size = left;
 

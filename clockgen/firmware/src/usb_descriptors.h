@@ -71,17 +71,23 @@ void usb_descriptor_set_serial(const char* serial);
 	+ TUD_AUDIO_DESC_OUTPUT_TERM_LEN \
 	)
 
+// One streaming (non-zero bandwidth) alternate setting: standard interface descriptor plus its class-specific format and EP descriptors
+#define TUD_AUDIO_DESC_ALT_DATA_LEN ( \
+	TUD_AUDIO_DESC_STD_AS_INT_LEN \
+	+ TUD_AUDIO_DESC_CS_AS_INT_LEN \
+		+ TUD_AUDIO_DESC_TYPE_I_FORMAT_LEN \
+		+ TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN \
+		+ TUD_AUDIO_DESC_CS_AS_ISO_EP_LEN \
+	)
+
 #define TUD_AUDIO_DESC_TOTAL_LEN ( \
 	TUD_AUDIO_DESC_IAD_LEN \
 	+ TUD_AUDIO_DESC_STD_AC_LEN \
 		+ TUD_AUDIO_DESC_CS_AC_LEN \
 			+ TUD_AUDIO_DESC_CS_AC_LEN_TOTAL \
-		+ TUD_AUDIO_DESC_STD_AS_INT_LEN \
-		+ TUD_AUDIO_DESC_STD_AS_INT_LEN \
-	+ TUD_AUDIO_DESC_CS_AS_INT_LEN \
-		+ TUD_AUDIO_DESC_TYPE_I_FORMAT_LEN \
-		+ TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN \
-		+ TUD_AUDIO_DESC_CS_AS_ISO_EP_LEN \
+		+ TUD_AUDIO_DESC_STD_AS_INT_LEN /* alt 0, zero bandwidth */ \
+		+ TUD_AUDIO_DESC_ALT_DATA_LEN   /* alt 1, 2ch */ \
+		+ TUD_AUDIO_DESC_ALT_DATA_LEN   /* alt 2, 3ch */ \
 	)
 
 #endif

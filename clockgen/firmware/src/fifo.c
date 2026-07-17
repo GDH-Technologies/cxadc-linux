@@ -74,6 +74,15 @@ void fifo_put_filled(usb_audio_buffer* buffer)
 	queue_add_blocking(&pipe_full, &buffer);
 }
 
+void fifo_flush_filled()
+{
+	usb_audio_buffer* buffer;
+	while( queue_try_remove(&pipe_full, &buffer) == true )
+	{
+		queue_add_blocking(&pipe_empty, &buffer);
+	}
+}
+
 void fifo_set_mode(fifo_mode new_mode)
 {
 	dbg_say("fifo_set_mode ");
