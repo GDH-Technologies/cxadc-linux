@@ -8,6 +8,8 @@
 #include "tusb.h"
 #include "fifo.h"
 #include "clock_gen.h"
+#include "adc_power.h"
+#include "global_status.h"
 #include "dbg.h"
 
 //--------------------------------------------------------------------+
@@ -292,7 +294,7 @@ bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t func_id, uint8_t ep_i
 	return true;
 }
 
-// Invoked on SET_INTERFACE for a non-zero (data streaming) alternate setting, after the EP was opened
+// Invoked on SET_INTERFACE, after any previously open EP was closed and the new alt's EP (if any) was opened
 bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const * p_request)
 {
 	(void) rhport;
@@ -303,6 +305,9 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const * p_reque
 	// A fresh stream should not begin with audio from the previous session
 	release_current_buffer();
 	fifo_flush_filled();
+
+	adc_power_set(alt > 0);
+	global_status_access( global_status.usb_alt_setting = alt );
 
 	dbg_say("set_itf alt ");
 	dbg_u8(alt);
@@ -317,6 +322,9 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport, tusb_control_request_t const 
 
 	usb_audio_active_alt = 0;
 	release_current_buffer();
+
+	adc_power_set(false);
+	global_status_access( global_status.usb_alt_setting = 0 );
 
 	dbg_say("close_EP\n");
 	return true;

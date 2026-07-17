@@ -38,6 +38,14 @@ typedef struct __attribute__((packed))
 	
 	// Counts RX timeout conditions in main1
 	uint32_t  main1_rxsample_tmo;
+
+	// NOTE new fields go at the end so existing offsets stay valid for host-side decoders
+	// true while the PCM1802 is powered and its PIO capture is running
+	bool_u8   adc_powered;
+	// active alternate setting of the USB streaming interface (0 = closed, 1 = 2ch, 2 = 3ch)
+	uint8_t   usb_alt_setting;
+	// number of times the ADC has been powered up since boot
+	uint32_t  adc_power_cycles;
 }
 global_status_fields;
 

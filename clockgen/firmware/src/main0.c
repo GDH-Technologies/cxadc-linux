@@ -15,8 +15,10 @@
 #include "dbg.h"
 #include "main1.h"
 #include "fifo.h"
+#include "usb_audio.h"
 #include "usb_descriptors.h"
 #include "global_status.h"
+#include "adc_power.h"
 
 int main(void)
 {
@@ -56,20 +58,28 @@ int main(void)
 	while (true)
 	{
 		// tinyusb device task
-		tud_task(); 
-		
+		tud_task();
+
 		// t is now roughly in 250 ms
 		uint32_t t = time_us_32() >> 18;
-		
-		// if clock gen init is not successful then something is really wrong and we blink with about 2Hz, otherwise led is just on
-		if( (success) || ((t & 0x1) == 0) )
+
+		bool led_on;
+		if( ! success )
 		{
-			gpio_put(led_pin, 1);
+			// clock gen init failed, something is really wrong: blink with about 2 Hz
+			led_on = (t & 0x1) == 0;
+		}
+		else if( usb_audio_active_alt > 0 )
+		{
+			// a stream is open, ADC capture is live: solid on
+			led_on = true;
 		}
 		else
 		{
-			gpio_put(led_pin, 0);
+			// idle, ADC powered down: short blip roughly every 4 s
+			led_on = (t & 0xf) == 0;
 		}
+		gpio_put(led_pin, led_on);
 	}
 
 	return 0;
@@ -89,7 +99,7 @@ void tud_mount_cb()
 // Invoked when device is unmounted
 void tud_umount_cb()
 {
-	// NOOP
+	adc_power_set(false);
 	dbg_say("unmount\n");
 }
 
@@ -98,13 +108,14 @@ void tud_umount_cb()
 // Within 7ms, device must draw an average of current less than 2.5 mA from bus
 void tud_suspend_cb(bool remote_wakeup_en)
 {
-	// NOOP
+	(void) remote_wakeup_en;
+	adc_power_suspend();
 	dbg_say("suspend\n");
 }
 
 // Invoked when usb bus is resumed
 void tud_resume_cb()
 {
-	// NOOP
+	adc_power_resume();
 	dbg_say("resume\n");
 }

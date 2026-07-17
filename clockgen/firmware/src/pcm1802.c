@@ -75,33 +75,43 @@ void pcm_pio_init()
 	// https://github.com/raspberrypi/pico-examples/blob/a7ad17156bf60842ee55c8f86cd39e9cd7427c1d/pio/clocked_input/clocked_input.c#L45
 	pio = pio0;
 	pio_program_offset = pio_add_program(pio, &pcm1802_fmt00_program);
-	
+
 	pio_sm = setup_pio(PCM_PIO_ADC0_DATA);
-	
-	pio_sm_set_enabled(pio, pio_sm, true);
+
+	// the state machine stays disabled until pcm1802_start()
 }
 
 void pcm1802_init()
 {
 	gpio_init(PCM1802_POWER_DOWN_PIN);
 	gpio_set_dir(PCM1802_POWER_DOWN_PIN, GPIO_OUT);
-	pcm1802_power_down();
+	gpio_put(PCM1802_POWER_DOWN_PIN, 0);
 	pcm1802_out_of_sync_drops = 0;
 	pcm1802_rch_tmo_count = 0;
 	pcm1802_rch_tmo_value = 0;
 	pcm_pio_init();
 }
 
-void pcm1802_power_up()
+void pcm1802_start()
 {
-	dbg_say("pcm1802_power_up\n");
+	// re-enter the PIO program at its first instruction with clean FIFOs, so every
+	// power-up acquires the L/R phase the same way a cold boot does
+	pio_sm_set_enabled(pio, pio_sm, false);
+	pio_sm_clear_fifos(pio, pio_sm);
+	pio_sm_restart(pio, pio_sm);
+	pio_sm_exec(pio, pio_sm, pio_encode_jmp(pio_program_offset));
+	pio_sm_set_enabled(pio, pio_sm, true);
+
 	gpio_put(PCM1802_POWER_DOWN_PIN, 1);
+	dbg_say("pcm1802_start\n");
 }
 
-void pcm1802_power_down()
+void pcm1802_stop()
 {
 	gpio_put(PCM1802_POWER_DOWN_PIN, 0);
-	dbg_say("pcm1802_power_down\n");
+	pio_sm_set_enabled(pio, pio_sm, false);
+	pio_sm_clear_fifos(pio, pio_sm);
+	dbg_say("pcm1802_stop\n");
 }
 
 

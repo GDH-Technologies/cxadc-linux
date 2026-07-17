@@ -111,6 +111,12 @@ err_t si5351_enable_spread_spectrum(bool enabled);
 // returns ERROR_NONE on success
 err_t si5351_enable_outputs(bool enabled);
 
+// Enables or disables a single clock output, leaving the others untouched
+// output  - The output channel (0..7)
+// enabled - Whether the output is enabled
+// returns ERROR_NONE on success
+err_t si5351_enable_output(uint8_t output, bool enabled);
+
 // Configures the additional output devider
 // output - Which output to configure (0..2)
 // div    - The divider ratio to set

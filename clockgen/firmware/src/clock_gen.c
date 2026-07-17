@@ -183,7 +183,22 @@ void clock_gen_default()
 	ouput1 = set_multisynth(NULL, &setup_28m6hz, 1);
 	ouput2 = set_multisynth(NULL, &setup_12m288hz, 2);
 
-	si5351_enable_outputs(true);
+	// CXADC card clocks run unconditionally, the ADC master clock (CLK2) stays
+	// gated until a USB stream opens (see clock_gen_adc_clock_enable)
+	si5351_enable_output(0, true);
+	si5351_enable_output(1, true);
+	si5351_enable_output(2, false);
+}
+
+void clock_gen_adc_clock_enable(bool enabled)
+{
+	if( not_initialized() )
+		return;
+
+	si5351_enable_output(2, enabled);
+
+	dbg_say("adc clk ");
+	dbg_say(enabled ? "on\n" : "off\n");
 }
 
 

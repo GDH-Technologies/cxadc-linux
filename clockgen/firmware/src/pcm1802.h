@@ -16,8 +16,11 @@ extern uint32_t pcm1802_rch_tmo_count;
 extern uint32_t pcm1802_rch_tmo_value;
 
 void pcm1802_init();
-void pcm1802_power_up();
-void pcm1802_power_down();
+// Powers the ADC up / down (PDWN pin) together with the PIO capture lifecycle.
+// pcm1802_start re-enters the PIO program from the top so the L/R phase is
+// re-acquired deterministically once the ADC starts clocking again.
+void pcm1802_start();
+void pcm1802_stop();
 // Blocking     receive of one sample on L+R channels in USB UAC PCM Type I format
 void pcm1802_rx_24bit_uac_pcm_type1(uint8_t* l_3byte, uint8_t* r_3byte);
 // Non-blocking receive of one sample on L+R channels in USB UAC PCM Type I format, returns true if successful

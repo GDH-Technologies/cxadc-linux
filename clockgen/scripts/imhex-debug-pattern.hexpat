@@ -19,4 +19,11 @@ struct debug_info {
 
 	// Counts RX timeout conditions in main1
 	le u32 main1_rxsample_tmo;
+
+	// true while the PCM1802 is powered and its PIO capture is running
+	u8 adc_powered;
+	// active alternate setting of the USB streaming interface (0 = closed, 1 = 2ch, 2 = 3ch)
+	u8 usb_alt_setting;
+	// number of times the ADC has been powered up since boot
+	le u32 adc_power_cycles;
 };

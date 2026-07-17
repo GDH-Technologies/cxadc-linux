@@ -181,6 +181,10 @@ err_t write_n(uint8_t* data, uint8_t n);
 
 static i2c_inst_t* pi_i2c_bus;
 static si5351Config_t m_si5351Config;
+
+// Shadow of register 3 (OEB), a set bit means the output is disabled.
+// Kept in RAM so per-output changes don't need an I2C read-modify-write.
+static uint8_t m_oebShadow = 0xFF;
 static uint8_t lastRdivValue[3];
   
 void si5351_init()
@@ -216,6 +220,7 @@ err_t si5351_begin(i2c_inst_t* i2c)
 	
 	// Disable all outputs setting CLKx_DIS high
 	ASSERT_STATUS(write_8(SI5351_REGISTER_3_OUTPUT_ENABLE_CONTROL, 0xFF));
+	m_oebShadow = 0xFF;
 
 	// Power down all output drivers
 	ASSERT_STATUS(write_8(SI5351_REGISTER_16_CLK0_CONTROL, 0x80));
@@ -495,7 +500,26 @@ err_t si5351_enable_outputs(bool enabled)
 	ASSERT(m_si5351Config.initialised, ERROR_DEVICENOTINITIALISED);
 
 	// Enabled desired outputs (see Register 3)
-	ASSERT_STATUS(write_8(SI5351_REGISTER_3_OUTPUT_ENABLE_CONTROL, enabled ? 0x00 : 0xFF));
+	uint8_t regval = enabled ? 0x00 : 0xFF;
+	ASSERT_STATUS(write_8(SI5351_REGISTER_3_OUTPUT_ENABLE_CONTROL, regval));
+	m_oebShadow = regval;
+
+	return ERROR_NONE;
+}
+
+err_t si5351_enable_output(uint8_t output, bool enabled)
+{
+	// Make sure we've called init first
+	ASSERT(m_si5351Config.initialised, ERROR_DEVICENOTINITIALISED);
+	ASSERT(output < 8, ERROR_INVALIDPARAMETER);
+
+	uint8_t mask = (uint8_t)(1u << output);
+	uint8_t regval = enabled ? (uint8_t)(m_oebShadow & ~mask) : (uint8_t)(m_oebShadow | mask);
+	if( regval == m_oebShadow )
+		return ERROR_NONE;
+
+	ASSERT_STATUS(write_8(SI5351_REGISTER_3_OUTPUT_ENABLE_CONTROL, regval));
+	m_oebShadow = regval;
 
 	return ERROR_NONE;
 }

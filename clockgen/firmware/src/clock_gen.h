@@ -16,6 +16,9 @@
 bool clock_gen_init();
 void clock_gen_default();
 
+// Gates the PCM1802 master clock (CLK2). The CXADC clocks (CLK0/CLK1) are never gated.
+void clock_gen_adc_clock_enable(bool enabled);
+
 const uint32_t* clock_gen_get_adc_sample_rate_options(uint8_t* len);
 uint32_t        clock_gen_get_adc_sample_rate();
 void            clock_gen_set_adc_sample_rate(uint32_t rate_hz);

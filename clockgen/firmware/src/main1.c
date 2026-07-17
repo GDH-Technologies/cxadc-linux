@@ -11,6 +11,7 @@
 #include "pcm1802.h"
 #include "head_switch.h"
 #include "global_status.h"
+#include "adc_power.h"
 
 // The exact value does not matter, it just has to be large enough to not run out
 // between two regular sample values. A value of 0xffff will timout about 100 times per second
@@ -95,36 +96,65 @@ static bool fill_buffer_debug(usb_audio_buffer* buffer)
 	return true;
 }
 
-static void fill_buffer(usb_audio_buffer* buffer)
+static bool fill_buffer(usb_audio_buffer* buffer)
 {
-	while(true)
-	{
-		fifo_mode mode = fifo_get_mode();
-		bool success = false;
-		
-		if( mode == fifo_mode_normal )
-			success = fill_buffer_normal( buffer );
-		
-		if( mode == fifo_mode_debug )
-			success = fill_buffer_debug( buffer );
-		
-		if( success )
-			return;
-	}
+	fifo_mode mode = fifo_get_mode();
+
+	if( mode == fifo_mode_debug )
+		return fill_buffer_debug( buffer );
+
+	return fill_buffer_normal( buffer );
 }
 
 void main1()
 {
 	dbg_say("main1()\n");
-	
+
 	head_switch_init();
-	pcm1802_init();
-	pcm1802_power_up();
-	
+	pcm1802_init(); // ADC stays powered down until a stream opens
+
+	bool adc_running = false;
+
 	while(1)
 	{
-		usb_audio_buffer* buffer = fifo_take_empty();
-		fill_buffer(buffer);
-		fifo_put_filled(buffer);
+		bool want_adc = adc_power_requested();
+
+		if( want_adc && !adc_running )
+		{
+			pcm1802_start();
+			adc_running = true;
+			global_status_access(
+			{
+				global_status.adc_powered = true_u8;
+				global_status.adc_power_cycles += 1;
+			});
+		}
+
+		if( !want_adc && adc_running )
+		{
+			pcm1802_stop();
+			adc_running = false;
+			global_status_access( global_status.adc_powered = false_u8 );
+		}
+
+		// with the ADC parked there is nothing to produce, unless the host wants debug dumps
+		if( !adc_running && fifo_get_mode() == fifo_mode_normal )
+		{
+			sleep_ms(1);
+			continue;
+		}
+
+		usb_audio_buffer* buffer = fifo_try_take_empty();
+		if( buffer == NULL )
+		{
+			// USB is not draining (stream closed or host stalled), stay responsive to power requests
+			sleep_ms(1);
+			continue;
+		}
+
+		if( fill_buffer(buffer) )
+			fifo_put_filled(buffer);
+		else
+			fifo_put_empty(buffer); // timed out (e.g. ADC clocks stopped), re-check power state
 	}
 }
