@@ -16,18 +16,55 @@ on:
       - dkms.conf
       - .github/workflows/build.yml
 
+# One runner per host, so queued pushes would otherwise pile compile load onto
+# the capture rigs. Superseded builds are safe to drop.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build on ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [cs0, cs1, wm]
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - ${{ matrix.host }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install build dependencies
+      # Runners have passwordless sudo only for the deploy helper, so CI cannot
+      # install packages. Fail loudly with the fix instead of half-building.
+      - name: Verify build prerequisites
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential linux-headers-$(uname -r) python3
+          set -euo pipefail
+
+          missing=()
+          for c in gcc cc make python3 git; do
+            command -v "$c" >/dev/null 2>&1 || missing+=("$c")
+          done
+
+          kdir="/lib/modules/$(uname -r)/build"
+          [ -d "${kdir}" ] || missing+=("kernel-devel-$(uname -r)")
+
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing build prerequisites on $(hostname): ${missing[*]}"
+            echo "Install them with:" >&2
+            echo "  sudo dnf install -y gcc make python3 git kernel-devel-$(uname -r)" >&2
+            exit 1
+          fi
+
+          echo "host:   $(hostname)"
+          echo "kernel: $(uname -r)"
+          echo "kdir:   ${kdir}"
+          gcc --version | head -n1
 
       - name: Build kernel module
         run: make module
@@ -47,10 +84,16 @@ jobs:
 
       - name: Lint cxadc-status (ruff, non-blocking)
         run: |
-          python3 -m pip install --quiet ruff || exit 0
-          ruff check src/tools/cxadc-status/cxadc-status || true
+          if command -v ruff >/dev/null 2>&1; then
+            ruff check src/tools/cxadc-status/cxadc-status || true
+          else
+            echo "::notice::ruff not installed on $(hostname); skipping lint"
+          fi
 
-      - name: Smoke-test cxadc-status (no hardware present)
+      # cs0/cs1 have real cards and may be mid-capture. cxadc-status is
+      # read-only by contract (sysfs/procfs/ALSA, never opens /dev/cxadcN),
+      # so this is safe to run against live hardware.
+      - name: Smoke-test cxadc-status
         run: |
           python3 src/tools/cxadc-status/cxadc-status --plain --no-color
           python3 src/tools/cxadc-status/cxadc-status --json

@@ -10,24 +10,48 @@ on:
       - clockgen/**
       - .github/workflows/clockgen-firmware.yml
 
+concurrency:
+  group: clockgen-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-firmware:
-    runs-on: ubuntu-latest
+    # RP2040 firmware is host-independent, and wm is the only runner carrying
+    # the ARM cross toolchain. Building it on the capture rigs would prove
+    # nothing while competing with live captures.
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - wm
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install toolchain
+      # Runners have passwordless sudo only for the deploy helper, so CI cannot
+      # install packages. Fail loudly with the fix instead of half-building.
+      - name: Verify toolchain
+        shell: bash
         run: |
-          sudo apt update
-          sudo apt install -y \
-            git \
-            cmake \
-            make \
-            gcc \
-            g++ \
-            gcc-arm-none-eabi
+          set -euo pipefail
+
+          missing=()
+          for c in git cmake make gcc g++ arm-none-eabi-gcc arm-none-eabi-g++; do
+            command -v "$c" >/dev/null 2>&1 || missing+=("$c")
+          done
+
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::Missing clockgen toolchain on $(hostname): ${missing[*]}"
+            echo "Install them with:" >&2
+            echo "  sudo dnf install -y git cmake make gcc gcc-c++ \\" >&2
+            echo "    arm-none-eabi-gcc-cs arm-none-eabi-gcc-cs-c++ arm-none-eabi-newlib" >&2
+            exit 1
+          fi
+
+          echo "host: $(hostname)"
+          cmake --version | head -n1
+          arm-none-eabi-gcc --version | head -n1
 
       - name: Build clockgen firmware
         run: |
