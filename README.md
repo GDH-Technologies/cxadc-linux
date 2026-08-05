@@ -418,6 +418,16 @@ inline).
 > LaserDisc captures, but for archival masters prefer a one-time `leveladj`
 > before capture. It is disabled by default.
 
+##### Ring-overrun detection (sample-continuity guarantee)
+
+The driver counts **ring overruns**: events where the 64 MB DMA ring lapped
+a reader that fell more than a full ring (~2.2 s at 28.6 MSPS) behind, which
+silently overwrites unread samples. The per-device counter is exposed at
+`/sys/class/cxadc/cxadcN/device/parameters/overrun_count` (read-only, reset
+each time the device is opened). `cx-capture` reads it after every capture,
+prints it in the final summary, and exits with code **3** when it is
+non-zero — a capture that exits 0 is provably sample-continuous.
+
 #### Basic Capture with cat (10 seconds)
 
 ```bash

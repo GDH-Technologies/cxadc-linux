@@ -305,7 +305,14 @@ static void usage(const char *prog)
 		"      --tcp HOST:PORT   stream to a TCP endpoint (best-effort)\n"
 		"      --listen PORT     serve one TCP client (best-effort)\n"
 		"      --fifo PATH       write to a named pipe (best-effort)\n"
-		"  -h, --help            show this help\n",
+		"  -h, --help            show this help\n"
+		"\n"
+		"Exit codes:\n"
+		"  0  capture completed, no ring overruns detected\n"
+		"  1  I/O or device error\n"
+		"  2  usage error\n"
+		"  3  capture completed but the driver reported ring overrun(s):\n"
+		"     the DMA writer lapped the reader and samples were lost\n",
 		prog);
 }
 
@@ -558,8 +565,37 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	fprintf(stderr, "\ncapture finished: %.1f MiB total\n",
+	/*
+	 * Close the device before reading overrun_count so no further reads
+	 * can race the readout; the counter only resets on the next open().
+	 */
+	close(fd);
+	fd = -1;
+
+	/*
+	 * Ring-overrun check: the driver counts events where the DMA writer
+	 * lapped our read position, i.e. samples were lost. Non-zero means
+	 * the capture is NOT sample-continuous; signal it mechanically with
+	 * exit code 3 so callers can fail such captures.
+	 */
+	int overruns = -1; /* -1: older driver without the attribute */
+	char ovpath[256];
+	snprintf(ovpath, sizeof(ovpath),
+		 "/sys/class/cxadc/%s/device/parameters/overrun_count", device);
+	if (access(ovpath, R_OK) == 0 &&
+	    read_cxadc_param("overrun_count", device, &overruns) != 0)
+		overruns = -1;
+
+	fprintf(stderr, "\ncapture finished: %.1f MiB total",
 		(double)total / (1024.0 * 1024.0));
+	if (overruns < 0)
+		fprintf(stderr, "  overruns unknown (driver lacks overrun_count)\n");
+	else
+		fprintf(stderr, "  overruns %d%s\n", overruns,
+			overruns ? "  ** SAMPLES LOST **" : "");
+	if (overruns > 0 && ret == 0)
+		ret = 3;
+
 	for (int i = 0; i < nsinks; i++) {
 		struct sink *s = &sinks[i];
 		if (!s->reliable)
@@ -572,7 +608,6 @@ int main(int argc, char *argv[])
 			close(s->listen_fd);
 	}
 
-	close(fd);
 	free(buf);
 	return ret;
 }

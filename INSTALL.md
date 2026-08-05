@@ -142,3 +142,50 @@ Optional cleanup of staged source:
 sudo rm -rf /usr/src/cxadc-0.5
 ```
 
+### Sudoers for CI/CD
+
+Create a dedicated sudoers drop-in for the runner user (example user: `rdodge`).
+
+Edit with `visudo`:
+
+```bash
+sudo visudo -f /etc/sudoers.d/cxadc-linux-deploy
+```
+
+Use this content (update `rdodge` only if your runner user differs):
+
+```sudoers
+User_Alias CXADC_RUNNER = rdodge
+
+Cmnd_Alias CXADC_DEPLOY_INSTALL = /usr/bin/bash /home/rdodge/Repos/cxadc-linux/src/scripts/deploy_dkms_install.sh
+Cmnd_Alias CXADC_DEPLOY_INSTALL_ENV = /usr/bin/env DKMS_TARGET_KERNEL=* DKMS_INSTALL_ALL_KERNELS=* PRUNE_OLD_DKMS_VERSIONS=* /usr/bin/bash /home/rdodge/Repos/cxadc-linux/src/scripts/deploy_dkms_install.sh
+Cmnd_Alias CXADC_MODPROBE_REMOVE = /usr/sbin/modprobe -r cxadc
+Cmnd_Alias CXADC_MODPROBE_LOAD = /usr/sbin/modprobe cxadc
+
+CXADC_RUNNER ALL=(root) NOPASSWD: \
+	CXADC_DEPLOY_INSTALL, \
+	CXADC_DEPLOY_INSTALL_ENV, \
+	CXADC_MODPROBE_REMOVE, CXADC_MODPROBE_LOAD
+```
+
+Set secure file ownership and permissions:
+
+```bash
+sudo chown root:root /etc/sudoers.d/cxadc-linux-deploy
+sudo chmod 0440 /etc/sudoers.d/cxadc-linux-deploy
+```
+
+Quick verification for the runner user:
+
+```bash
+sudo -n -l | grep -E 'deploy_dkms_install\.sh|modprobe'
+```
+
+> [!IMPORTANT]
+> Use absolute paths exactly as shown. Sudoers command matching is strict; any
+> path mismatch (for example omitting `/home/rdodge/Repos/cxadc-linux/...`) will
+> cause `sudo: a password is required` in GitHub Actions.
+
+```
+
+```
