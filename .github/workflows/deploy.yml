@@ -195,8 +195,31 @@ jobs:
               exit 1
             fi
             echo "Reloading cxadc module..."
-            run_as_root "${modprobe_bin}" -r cxadc || true
+            # `modprobe -r ... || true` used to swallow every removal failure.
+            # That conflates two very different cases: "not currently loaded"
+            # (fine, fall through and load it) and "module is in use" (NOT
+            # fine). In the second case the subsequent modprobe is a no-op
+            # because the module is still resident, so the job reported a
+            # successful reload while leaving the OLD module loaded -- on
+            # capture rigs, where the module being busy is the normal state.
+            if lsmod | grep -q '^cxadc'; then
+              cxadc_refs="$(lsmod | awk '/^cxadc/{print $3}')"
+              if [ "${cxadc_refs}" != "0" ]; then
+                echo "ERROR: cxadc is in use (refcount ${cxadc_refs}); refusing to reload." >&2
+                echo "       A capture is most likely running. Retry when the card is" >&2
+                echo "       idle, or reboot to pick up the new module." >&2
+                exit 1
+              fi
+              run_as_root "${modprobe_bin}" -r cxadc
+            else
+              echo "cxadc not currently loaded; loading it"
+            fi
             run_as_root "${modprobe_bin}" cxadc
+            if ! lsmod | grep -q '^cxadc'; then
+              echo "ERROR: cxadc did not load after reload" >&2
+              exit 1
+            fi
+            echo "cxadc reloaded"
           else
             echo "Skipping module reload (reload_module=false)"
           fi
