@@ -211,9 +211,13 @@ jobs:
             exit 1
           fi
 
+          # DEST_MODULE_LOCATION in dkms.conf asks for /updates/dkms, but
+          # Fedora's DKMS overrides it and installs to extra/. Accept either,
+          # so the check still catches a module coming from somewhere that is
+          # not DKMS-managed at all.
           modinfo_path="$(modinfo -n cxadc)"
-          if ! echo "${modinfo_path}" | grep -q '/updates/dkms/'; then
-            echo "ERROR: cxadc module path is not from updates/dkms: ${modinfo_path}" >&2
+          if ! echo "${modinfo_path}" | grep -qE '/(updates/dkms|extra)/'; then
+            echo "ERROR: cxadc module path is not DKMS-managed (expected updates/dkms or extra): ${modinfo_path}" >&2
             exit 1
           fi
 

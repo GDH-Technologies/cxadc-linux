@@ -1,7 +1,7 @@
 ## Fedora DKMS Installation (cxadc)
 
 These instructions are specific to Fedora and the current repository layout
-(`src/kernel/` module source, DKMS package version `0.5`).
+(`src/kernel/` module source, DKMS package version `1.0`).
 
 ### 1) Prerequisites
 
@@ -56,16 +56,16 @@ sudo rm -rf /usr/src/cxadc-0.5
 Copy this repository into DKMS source path:
 
 ```bash
-sudo mkdir -p /usr/src/cxadc-0.5
-sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-0.5/
+sudo mkdir -p /usr/src/cxadc-1.0
+sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.0/
 ```
 
 ### 5) Build and install with DKMS
 
 ```bash
-sudo dkms add -m cxadc -v 0.5
-sudo dkms build -m cxadc -v 0.5
-sudo dkms install -m cxadc -v 0.5
+sudo dkms add -m cxadc -v 1.0
+sudo dkms build -m cxadc -v 1.0
+sudo dkms install -m cxadc -v 1.0
 sudo depmod -a
 ```
 
@@ -95,7 +95,7 @@ lsmod | grep cxadc
 ls -l /dev/cxadc*
 ```
 
-Expected: `cxadc/0.5` shown by DKMS and at least `/dev/cxadc0` present when
+Expected: `cxadc/1.0` shown by DKMS and at least `/dev/cxadc0` present when
 supported hardware is installed.
 
 If you define host-specific udev aliases (for example `/dev/cx/vcr0-video`),
@@ -122,9 +122,9 @@ scripts into `/usr/local/bin` by default.
 DKMS should auto-rebuild at kernel install/boot. To force a refresh manually:
 
 ```bash
-sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-0.5/
-sudo dkms build -m cxadc -v 0.5
-sudo dkms install -m cxadc -v 0.5 --force
+sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.0/
+sudo dkms build -m cxadc -v 1.0
+sudo dkms install -m cxadc -v 1.0 --force
 sudo depmod -a
 ```
 
@@ -133,13 +133,13 @@ sudo depmod -a
 Remove DKMS module:
 
 ```bash
-sudo dkms remove -m cxadc -v 0.5 --all
+sudo dkms remove -m cxadc -v 1.0 --all
 ```
 
 Optional cleanup of staged source:
 
 ```bash
-sudo rm -rf /usr/src/cxadc-0.5
+sudo rm -rf /usr/src/cxadc-1.0
 ```
 
 ### Sudoers for CI/CD

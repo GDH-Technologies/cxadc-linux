@@ -22,6 +22,7 @@ dkms_name="$(awk -F= '/^PACKAGE_NAME=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
 dkms_version="$(awk -F= '/^PACKAGE_VERSION=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
 kernel_module_version="$(sed -nE 's/.*version ([0-9]+(\.[0-9]+)*)/\1/p' src/kernel/cxadc.c | head -n1)"
 readme_version="$(sed -nE 's/.*Current DKMS package version:[[:space:]]*`([^`]+)`.*/\1/p' README.md | head -n1)"
+install_doc_version="$(sed -nE 's/.*DKMS package version[[:space:]]*`([^`]+)`.*/\1/p' INSTALL.md | head -n1)"
 
 dkms_bin="$(command -v dkms || true)"
 depmod_bin="$(command -v depmod || true)"
@@ -50,11 +51,18 @@ if [[ -z "${readme_version}" ]]; then
   echo "ERROR: README.md missing 'Current DKMS package version:' marker" >&2
   exit 1
 fi
-if [[ "${dkms_version}" != "${kernel_module_version}" || "${dkms_version}" != "${readme_version}" ]]; then
+if [[ -z "${install_doc_version}" ]]; then
+  echo "ERROR: INSTALL.md missing 'DKMS package version' marker" >&2
+  exit 1
+fi
+if [[ "${dkms_version}" != "${kernel_module_version}" \
+   || "${dkms_version}" != "${readme_version}" \
+   || "${dkms_version}" != "${install_doc_version}" ]]; then
   echo "ERROR: version mismatch detected:" >&2
   echo "  dkms.conf: ${dkms_version}" >&2
   echo "  src/kernel/cxadc.c: ${kernel_module_version}" >&2
   echo "  README.md: ${readme_version}" >&2
+  echo "  INSTALL.md: ${install_doc_version}" >&2
   exit 1
 fi
 if [[ -z "${dkms_bin}" ]]; then
