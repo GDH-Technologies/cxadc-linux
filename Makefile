@@ -73,7 +73,18 @@ module:
 	@cp -f $(SRC_KERNEL)/cxadc.ko $(BUILD_DIR)/cxadc.ko 2>/dev/null || true
 	@echo "Kernel module built: $(BUILD_DIR)/cxadc.ko"
 
+# Hand-installs the module OUTSIDE DKMS, straight into /lib/modules/$(uname -r).
+# DKMS then knows nothing about it: it will not rebuild it on kernel upgrade and
+# `dkms status` will not list it, so it silently rots at whatever version it was
+# when installed. A copy left behind this way (May 2026, pre-1.0, no
+# overrun_count) survived in /lib/modules/6.19.14-300.fc44.x86_64/updates/ long
+# after that kernel itself was removed. Prefer the DKMS path:
+#   sudo src/scripts/deploy_dkms_install.sh
 modules_install install-module:
+	@echo "WARNING: installing outside DKMS - this module will NOT be rebuilt"
+	@echo "         on kernel upgrades and will not appear in 'dkms status'."
+	@echo "         Use src/scripts/deploy_dkms_install.sh unless you know why"
+	@echo "         you want this."
 	$(MAKE) -C $(KDIR) M=$(CURDIR)/$(SRC_KERNEL) modules_install
 	depmod -a
 
