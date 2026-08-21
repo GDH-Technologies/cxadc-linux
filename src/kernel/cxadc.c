@@ -31,6 +31,7 @@
 #include <linux/moduleparam.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/ratelimit.h>
 
 /*
  * From Linux 4.21, dma_alloc_coherent always returns zeroed memory,
@@ -57,6 +58,8 @@
 	dev_err(&ctd->pci->dev, fmt, ##__VA_ARGS__)
 #define cx_info(fmt, ...) \
 	dev_info(&ctd->pci->dev, fmt, ##__VA_ARGS__)
+#define cx_info_ratelimited(fmt, ...) \
+	dev_info_ratelimited(&ctd->pci->dev, fmt, ##__VA_ARGS__)
 
 /* 64 Mbytes VBI DMA BUFF */
 #define VBI_DMA_BUFF_SIZE (1024*1024*64)
@@ -111,6 +114,14 @@ struct cxadc {
 	atomic64_t writer_total_pages;
 	s64 reader_base_pages;
 	atomic_t overrun_count;
+
+	/*
+	 * Set when a hard DMA fault (INTERRUPT_ERR_MASK) is first seen, after
+	 * which those bits are masked off in MO_VID_INTMSK for the rest of the
+	 * session. Written only from the IRQ handler; reset by open() before
+	 * interrupts are enabled, so each capture re-arms error reporting.
+	 */
+	bool err_irq_masked;
 
 	/* device attributes */
 	int latency;
@@ -509,6 +520,16 @@ static int cxadc_major;
 
 #define INTERRUPT_MASK	0x18888
 
+/*
+ * VBI_OFLOW | VBI_SYNC | OPC_ERR. Unlike RISCI1/RISCI2 these are level
+ * conditions: acknowledging MO_VID_INTSTAT does not clear the underlying
+ * fault, so the card re-asserts immediately and the handler is re-entered
+ * forever. Report once, then mask them for the rest of the session -- a card
+ * that has lost its sample clock must not be able to livelock a shared IRQ
+ * line and take the host down with it.
+ */
+#define INTERRUPT_ERR_MASK	0x18800
+
 static struct pci_device_id cxadc_pci_tbl[] = {
 	{
 		.vendor       = 0x14f1,
@@ -748,6 +769,12 @@ static int cxadc_char_open(struct inode *inode, struct file *file)
 	atomic_set(&ctd->overrun_count, 0);
 
 	atomic_set(&ctd->lgpcnt, -1);
+
+	/* Re-arm error reporting: a previous session may have masked the error
+	 * bits after a DMA fault (see cxadc_irq). */
+	ctd->err_irq_masked = false;
+	cx_write(MO_VID_INTMSK, INTERRUPT_MASK);
+
 	cx_write(MO_PCI_INTMSK, 1); /* enable interrupt */
 
 	rv = wait_event_interruptible(ctd->readQ, atomic_read(&ctd->lgpcnt) != -1);
@@ -916,9 +943,6 @@ static irqreturn_t cxadc_irq(int irq, void *dev_id)
 	u32 astat = stat & allstat;
 	u32 ostat = astat;
 
-	if (ostat != 8 && allstat != 0 && ostat != 0)
-		cx_info("interrupt stat 0x%x masked 0x%x\n", allstat, ostat);
-
 	if (!astat)
 		return IRQ_RETVAL(0); /* if no interrupt bit set we return */
 
@@ -944,7 +968,24 @@ static irqreturn_t cxadc_irq(int irq, void *dev_id)
 		atomic_set(&ctd->lgpcnt, gp_cnt);
 		wake_up_interruptible(&ctd->readQ);
 	}
+	/* ACK before logging so the handler stays short. */
 	cx_write(MO_VID_INTSTAT, ostat);
+
+	if (ostat & INTERRUPT_ERR_MASK) {
+		/*
+		 * Hard DMA fault. The condition re-asserts the moment we ACK, so
+		 * report it once and mask it -- otherwise the log flood and the
+		 * IRQ flood together livelock the machine.
+		 */
+		if (!ctd->err_irq_masked) {
+			ctd->err_irq_masked = true;
+			cx_write(MO_VID_INTMSK, INTERRUPT_MASK & ~INTERRUPT_ERR_MASK);
+			cx_err("DMA fault (stat 0x%x); masking error interrupts for this session -- check the sample clock/ClockGen. Reopen the device to re-arm.\n",
+			       ostat);
+		}
+	} else if (ostat != 8) {
+		cx_info_ratelimited("interrupt stat 0x%x masked 0x%x\n", allstat, ostat);
+	}
 
 	return IRQ_RETVAL(1);
 }
@@ -1493,6 +1534,7 @@ static int cxadc_resume(struct pci_dev *pci_dev)
 	cx_write(MO_I2C, 3);
 
 	ret = request_irq(ctd->irq, cxadc_irq, IRQF_SHARED, "cxadc", ctd);
+	ctd->err_irq_masked = false;
 	cx_write(MO_VID_INTMSK, INTERRUPT_MASK);
 	return 0;
 }
