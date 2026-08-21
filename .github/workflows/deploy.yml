@@ -1,17 +1,21 @@
 name: Deploy cxadc-linux to cs0, cs1, and wm
 
 on:
-  push:
+  # Deploy is gated on "Build and Test" succeeding for the same commit. These
+  # used to be two independent push-triggered workflows racing for the same
+  # self-hosted runners, so deploy could (and did) ship a commit to all three
+  # capture rigs before CI had compiled it even once.
+  #
+  # build.yml's path filters must stay a superset of what deploy cares about,
+  # otherwise a deploy-relevant change never triggers a build and so never
+  # reaches deploy either.
+  workflow_run:
+    workflows: ["Build and Test"]
+    types:
+      - completed
     branches:
       - main
       - master
-    paths:
-      - src/**
-      - config/**
-      - Makefile
-      - dkms.conf
-      - src/scripts/deploy_dkms_install.sh
-      - .github/workflows/deploy.yml
   workflow_dispatch:
     inputs:
       force_reinstall:
@@ -47,6 +51,10 @@ concurrency:
 jobs:
   deploy:
     name: Deploy on ${{ matrix.host }}
+    # workflow_run fires on *completion*, success or not -- gate on conclusion.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -68,6 +76,7 @@ jobs:
           DKMS_TARGET_KERNEL: ${{ inputs.target_kernel }}
           DKMS_INSTALL_ALL_KERNELS: ${{ inputs.install_all_kernels }}
           PRUNE_OLD_DKMS_VERSIONS: ${{ inputs.prune_old_versions }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
 
@@ -117,12 +126,13 @@ jobs:
           dkms_version="$(awk -F= '/^PACKAGE_VERSION=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
           kernel_version="$(sed -nE 's/.*version ([0-9]+(\.[0-9]+)*)/\1/p' src/kernel/cxadc.c | head -n1)"
           readme_version="$(sed -nE 's/.*Current DKMS package version:[[:space:]]*`([^`]+)`.*/\1/p' README.md | head -n1)"
+          install_doc_version="$(sed -nE 's/.*DKMS package version[[:space:]]*`([^`]+)`.*/\1/p' INSTALL.md | head -n1)"
 
-          if [ -z "${dkms_version}" ] || [ -z "${kernel_version}" ] || [ -z "${readme_version}" ]; then
-            echo "ERROR: missing version marker in dkms.conf/src/kernel/cxadc.c/README.md" >&2
+          if [ -z "${dkms_version}" ] || [ -z "${kernel_version}" ] || [ -z "${readme_version}" ] || [ -z "${install_doc_version}" ]; then
+            echo "ERROR: missing version marker in dkms.conf/src/kernel/cxadc.c/README.md/INSTALL.md" >&2
             exit 1
           fi
-          if [ "${dkms_version}" != "${kernel_version}" ] || [ "${dkms_version}" != "${readme_version}" ]; then
+          if [ "${dkms_version}" != "${kernel_version}" ] || [ "${dkms_version}" != "${readme_version}" ] || [ "${dkms_version}" != "${install_doc_version}" ]; then
             echo "ERROR: version mismatch detected" >&2
             echo "  dkms.conf: ${dkms_version}" >&2
             echo "  src/kernel/cxadc.c: ${kernel_version}" >&2
@@ -130,25 +140,40 @@ jobs:
             exit 1
           fi
 
+          # What is installed on THIS host, not what this checkout happens to
+          # contain. The old check compared the repo's HEAD before and after
+          # the pull, which silently no-ops on whichever rig the developer
+          # pushed from -- its working copy is already at the new revision, so
+          # old_rev == new_rev and the host skipped its own deploy while
+          # reporting success. That is exactly how wm missed a fix that cs0 and
+          # cs1 received.
+          # Deliberately user-writable: run_as_root uses `sudo -n` against a
+          # scoped sudoers rule, and this is CI bookkeeping, not system state
+          # worth widening that rule for. Per-runner-home is exactly the right
+          # granularity anyway. A missing or stale stamp fails safe -- it
+          # redeploys, which is idempotent, rather than skipping.
+          stamp_file="${HOME:-/tmp}/.local/state/cxadc-deploy/deployed-sha"
+          deployed_rev="$(cat "${stamp_file}" 2>/dev/null || echo none)"
+
+          if [ -n "${TESTED_SHA:-}" ] && [ "${TESTED_SHA}" != "${new_rev}" ]; then
+            echo "NOTE: master has moved since the tested commit."
+            echo "  tested:   ${TESTED_SHA}"
+            echo "  deploying: ${new_rev}"
+          fi
+
+          echo "Deployed revision on this host: ${deployed_rev}"
+          echo "Target revision:                ${new_rev}"
+
           deploy_needed="false"
           if [ "${FORCE_REINSTALL:-false}" = "true" ]; then
             deploy_needed="true"
             echo "Force reinstall requested"
-          elif [ "${old_rev}" != "${new_rev}" ]; then
-            changed_files="$(git diff --name-only "${old_rev}" "${new_rev}" || true)"
-            if [ -n "${changed_files}" ]; then
-              echo "Changed files:"
-              printf '%s\n' "${changed_files}"
-              if echo "${changed_files}" | grep -qE '^(src/|config/|Makefile|dkms\.conf)'; then
-                deploy_needed="true"
-              fi
-            fi
-          else
-            echo "No new commits"
+          elif [ "${deployed_rev}" != "${new_rev}" ]; then
+            deploy_needed="true"
           fi
 
           if [ "${deploy_needed}" != "true" ]; then
-            echo "No deploy-relevant changes; skipping install"
+            echo "Host already running ${new_rev}; skipping install"
             exit 0
           fi
 
@@ -226,5 +251,12 @@ jobs:
             echo "ERROR: cxadc vermagic does not match running kernel ${running_kernel}" >&2
             exit 1
           fi
+
+          # Record what this host is now running. Written only after every
+          # verification above has passed, so a half-finished deploy leaves the
+          # old stamp and the next run retries instead of skipping.
+          mkdir -p "$(dirname "${stamp_file}")"
+          printf '%s\n' "${new_rev}" > "${stamp_file}"
+          echo "Recorded deployed revision ${new_rev}"
 
           echo "Deploy completed on ${{ matrix.host }}"

@@ -8,6 +8,10 @@ on:
       - Makefile
       - dkms.conf
       - .github/workflows/build.yml
+      # Deploy is gated on this workflow succeeding, and workflow_run carries
+      # no path filters of its own. So anything that should trigger a deploy
+      # must trigger a build first, or it silently reaches neither.
+      - .github/workflows/deploy.yml
   pull_request:
     paths:
       - src/**
@@ -15,6 +19,10 @@ on:
       - Makefile
       - dkms.conf
       - .github/workflows/build.yml
+      # Deploy is gated on this workflow succeeding, and workflow_run carries
+      # no path filters of its own. So anything that should trigger a deploy
+      # must trigger a build first, or it silently reaches neither.
+      - .github/workflows/deploy.yml
 
 # One runner per host, so queued pushes would otherwise pile compile load onto
 # the capture rigs. Superseded builds are safe to drop.
