@@ -37,25 +37,36 @@ cd cxadc-linux
 
 ### 3) Remove older DKMS installs (recommended migration step)
 
-If you previously installed `cxadc/0.1`, remove it first:
+> [!NOTE]
+> On the GDH capture rigs this is automatic. `src/scripts/deploy_dkms_install.sh`
+> prunes superseded DKMS state on every deploy (`PRUNE_OLD_DKMS_VERSIONS`,
+> default on). The manual steps below are for a first-time or off-fleet install.
+
+The automatic prune removes four things, and only once **every** bootable kernel
+already has the current version installed:
+
+1. superseded package versions — `dkms remove -m cxadc -v <old> --all`
+2. their leftover `/usr/src/cxadc-<old>` trees, which a stray `dkms add` would
+   otherwise resurrect
+3. DKMS state for kernels no longer present in `/lib/modules` (these accumulate
+   as the distro rolls kernels past `installonly_limit`)
+4. any `cxadc.ko*` under `/lib/modules/*/extra/` or
+   `/lib/modules/*/updates/dkms/` that no live DKMS entry owns, followed by a
+   `depmod` for that kernel
+
+> [!IMPORTANT]
+> The ordering is the safety property, not an implementation detail. Pruning the
+> old version *before* the new one reaches every kernel would strip the driver
+> from your fallback kernels — the ones you boot when the newest kernel misbehaves.
+> The helper refuses to prune while any bootable kernel is still missing the
+> current version, and says which kernels blocked it.
+
+To do it by hand, repeat this for each version you previously installed
+(`0.1`, `0.5`, and `1.0`, which is what the fleet ran before `1.1`):
 
 ```bash
 sudo dkms remove -m cxadc -v 0.1 --all || true
 sudo rm -rf /usr/src/cxadc-0.1
-```
-
-Also clear any prior `0.5` source copy before refreshing:
-
-```bash
-sudo dkms remove -m cxadc -v 0.5 --all || true
-sudo rm -rf /usr/src/cxadc-0.5
-```
-
-And clear any prior `1.0` install, which is what the fleet ran before `1.1`:
-
-```bash
-sudo dkms remove -m cxadc -v 1.0 --all || true
-sudo rm -rf /usr/src/cxadc-1.0
 ```
 
 ### 4) Stage source for DKMS
@@ -126,13 +137,40 @@ scripts into `/usr/local/bin` by default.
 
 ### 10) After kernel updates
 
-DKMS should auto-rebuild at kernel install/boot. To force a refresh manually:
+`AUTOINSTALL="YES"` in `dkms.conf` means a **newly installed** kernel gets the
+current version built for it automatically at kernel install/boot. To force a
+refresh manually:
 
 ```bash
 sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.1/
 sudo dkms build -m cxadc -v 1.1
 sudo dkms install -m cxadc -v 1.1 --force
 sudo depmod -a
+```
+
+Autoinstall does **not** back-fill kernels that were already installed before a
+version bump: those keep whatever version they had. That is what
+`DKMS_INSTALL_ALL_KERNELS` (default on) is for — it builds and installs the
+current version for every kernel in `/lib/modules`, so a fallback boot gets the
+same driver as the primary one. To back-fill by hand:
+
+```bash
+for k in $(ls -1 /lib/modules); do
+  [ -d "/lib/modules/$k/build" ] || { echo "skip $k (no kernel-devel)"; continue; }
+  sudo dkms build   -m cxadc -v 1.1 -k "$k"
+  sudo dkms install -m cxadc -v 1.1 -k "$k" --force
+done
+sudo depmod -a
+```
+
+A healthy fleet host shows the current version, and only the current version,
+installed for every kernel it can boot:
+
+```console
+$ dkms status -m cxadc
+cxadc/1.1, 7.1.9-200.fc44.x86_64,  x86_64: installed
+cxadc/1.1, 7.1.10-200.fc44.x86_64, x86_64: installed
+cxadc/1.1, 7.1.12-200.fc44.x86_64, x86_64: installed
 ```
 
 ### 11) Uninstall
@@ -192,6 +230,25 @@ sudo -n -l | grep -E 'deploy_dkms_install\.sh|modprobe'
 > Use absolute paths exactly as shown. Sudoers command matching is strict; any
 > path mismatch (for example omitting `/home/rdodge/Repos/cxadc-linux/...`) will
 > cause `sudo: a password is required` in GitHub Actions.
+
+> [!CAUTION]
+> `CXADC_DEPLOY_INSTALL_ENV` matches the command line **positionally**. It lists
+> exactly three variables — `DKMS_TARGET_KERNEL`, `DKMS_INSTALL_ALL_KERNELS`,
+> `PRUNE_OLD_DKMS_VERSIONS` — in that order, and `deploy.yml` passes exactly
+> those three, in that order. Adding a fourth variable to the `run_as_root env`
+> call, removing one, or reordering them stops matching this alias, and every
+> deploy on every rig falls back to a password prompt it cannot answer.
+>
+> This is why `DKMS_PRUNE_DRY_RUN` is **not** passed through `deploy.yml`. The
+> script honours it, but only from a real root shell:
+>
+> ```bash
+> sudo -i
+> DKMS_PRUNE_DRY_RUN=true bash /home/rdodge/Repos/cxadc-linux/src/scripts/deploy_dkms_install.sh
+> ```
+>
+> If you ever do need a new variable in the CI path, update this sudoers file on
+> **cs0, cs1 and wm** first, then `deploy.yml` — never the other way round.
 
 ```
 

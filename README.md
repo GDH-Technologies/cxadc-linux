@@ -531,6 +531,18 @@ Current DKMS package version: `1.1`
    dkms status | grep cxadc
    ```
 
+   You want the current version, and **only** the current version, listed as
+   `installed` for every kernel you can boot. Two things to look for:
+
+   - **An older version still listed.** Superseded versions are not removed
+     automatically by DKMS, and with `AUTOINSTALL="YES"` every new kernel
+     builds *each* registered version. The deploy pipeline prunes these
+     (`PRUNE_OLD_DKMS_VERSIONS`, default on); see INSTALL.md §3 to do it by hand.
+   - **A kernel missing the current version.** Autoinstall covers newly
+     installed kernels, but never back-fills kernels that predate a version
+     bump — so a fallback kernel can silently keep an older driver, or none at
+     all. `DKMS_INSTALL_ALL_KERNELS` (default on) back-fills them.
+
 2. **If DKMS is installed:** Rebuild automatically or manually:
 
    ```bash
