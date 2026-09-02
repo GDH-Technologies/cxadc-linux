@@ -127,7 +127,7 @@ anywhere else — don't relocate object rules.
   `PACKAGE_VERSION`, the `version N.N` string in the `src/kernel/cxadc.c` header
   comment, and README's `Current DKMS package version: \`N.N\``. Both
   `deploy.yml` and `src/scripts/deploy_dkms_install.sh` parse all three and abort
-  on mismatch. Bump all three together (currently `1.0`).
+  on mismatch. Bump all three together (currently `1.1`).
 - **`cxadc-status` must never open `/dev/cxadcN`** — it runs during live
   captures; sysfs/procfs/ALSA-read-only only.
 - **Never rename or repurpose sysfs parameters** under

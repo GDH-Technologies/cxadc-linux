@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * cxadc - CX2388x ADC DMA driver for Linux, version 1.0
+ * cxadc - CX2388x ADC DMA driver for Linux, version 1.1
  *
  * Copyright (C) 2005-2007 Hew How Chee <how_chee@yahoo.com>
  * Copyright (C) 2013-2015 Chad Page <Chad.Page@gmail.com>
@@ -122,6 +122,14 @@ struct cxadc {
 	 * interrupts are enabled, so each capture re-arms error reporting.
 	 */
 	bool err_irq_masked;
+
+	/*
+	 * Set once the PCI core reports an unrecoverable error for this device
+	 * (see cxadc_error_detected). One-way for the life of the module: the
+	 * card is gone, so open() refuses it and blocked readers are released
+	 * with an error instead of waiting on an IRQ that will never arrive.
+	 */
+	bool disconnected;
 
 	/* device attributes */
 	int latency;
@@ -676,6 +684,10 @@ static int cxadc_char_open(struct inode *inode, struct file *file)
 	if (ctd == NULL)
 		return -ENODEV;
 
+	/* The card raised an unrecoverable PCI error; it is not coming back. */
+	if (READ_ONCE(ctd->disconnected))
+		return -ENODEV;
+
 	mutex_lock(&ctd->lock);
 	if (ctd->in_use) {
 		mutex_unlock(&ctd->lock);
@@ -777,15 +789,23 @@ static int cxadc_char_open(struct inode *inode, struct file *file)
 
 	cx_write(MO_PCI_INTMSK, 1); /* enable interrupt */
 
-	rv = wait_event_interruptible(ctd->readQ, atomic_read(&ctd->lgpcnt) != -1);
-	if (rv) {
-		cx_write(MO_PCI_INTMSK, 0);
+	rv = wait_event_interruptible(ctd->readQ,
+				      atomic_read(&ctd->lgpcnt) != -1 ||
+				      READ_ONCE(ctd->disconnected));
+	if (rv || READ_ONCE(ctd->disconnected)) {
+		/*
+		 * Skip the MMIO write on a disconnected card -- touching it is
+		 * what raised the error. cxadc_error_detected() has already
+		 * quiesced whatever could still be reached.
+		 */
+		if (!READ_ONCE(ctd->disconnected))
+			cx_write(MO_PCI_INTMSK, 0);
 
 		mutex_lock(&ctd->lock);
 		ctd->in_use = false;
 		mutex_unlock(&ctd->lock);
 
-		return rv;
+		return rv ? rv : -ENODEV;
 	}
 
 	ctd->initial_page = atomic_read(&ctd->lgpcnt);
@@ -803,7 +823,12 @@ static int cxadc_char_release(struct inode *inode, struct file *file)
 {
 	struct cxadc *ctd = file->private_data;
 
-	cx_write(MO_PCI_INTMSK, 0);
+	/*
+	 * A reader that just took -EIO from a disconnected card lands here;
+	 * do not issue MMIO at hardware that is no longer answering.
+	 */
+	if (!READ_ONCE(ctd->disconnected))
+		cx_write(MO_PCI_INTMSK, 0);
 
 	mutex_lock(&ctd->lock);
 	ctd->in_use = false;
@@ -882,10 +907,21 @@ static ssize_t cxadc_char_read(struct file *file, char __user *tgt,
 			if (file->f_flags & O_NONBLOCK)
 				return rv;
 
-			rv2 = wait_event_interruptible(ctd->readQ, atomic_read(&ctd->lgpcnt) != gp_cnt);
+			rv2 = wait_event_interruptible(ctd->readQ,
+					atomic_read(&ctd->lgpcnt) != gp_cnt ||
+					READ_ONCE(ctd->disconnected));
 			if (rv2) {
 				return rv ? rv : rv2;
 			}
+
+			/*
+			 * Hand back whatever was already copied, then report the
+			 * failure on the next read(). Samples stop here either
+			 * way, and a short read followed by -EIO is what
+			 * cx-capture needs to see to flag the capture as lost.
+			 */
+			if (READ_ONCE(ctd->disconnected))
+				return rv ? rv : -EIO;
 
 			gp_cnt = atomic_read(&ctd->lgpcnt);
 
@@ -1093,8 +1129,34 @@ static int cxadc_probe(struct pci_dev *pci_dev,
 
 	ctd->mmio = ioremap(pci_resource_start(pci_dev, 0),
 			pci_resource_len(pci_dev, 0));
+	if (ctd->mmio == NULL) {
+		cx_err("cannot map mmio region\n");
+		rc = -ENOMEM;
+		goto fail1x;
+	}
 
 	cx_info("MEM :%x MMIO :%p\n", ctd->mem, ctd->mmio);
+
+	/*
+	 * Confirm the card answers MMIO before we touch anything on it.
+	 *
+	 * A card whose CX chip is dead can still enumerate and be assigned a
+	 * BAR -- config space responds, memory space does not -- and then every
+	 * register read comes back as all-ones. Arming the RISC/DMA engine
+	 * against one of those raises a fatal AER Transaction Layer error that
+	 * resets the root port and fails recovery; during udev coldplug at boot
+	 * that hangs the machine before the journal can record anything, which
+	 * is indistinguishable from a POST failure at the console.
+	 *
+	 * Two different registers must both read all-ones before we call the
+	 * card dead, so a legitimately all-ones register cannot trip this.
+	 */
+	if (cx_read(MO_DEV_CNTRL2) == ~(u32)0 &&
+	    cx_read(MO_PCI_INTMSK) == ~(u32)0) {
+		cx_err("card is not answering mmio reads (all-ones); refusing to attach -- the chip is faulted or dead\n");
+		rc = -ENODEV;
+		goto fail1u;
+	}
 
 	ctd->in_use = false;
 	mutex_init(&ctd->lock);
@@ -1183,7 +1245,7 @@ static int cxadc_probe(struct pci_dev *pci_dev,
 	rc = request_irq(ctd->irq, cxadc_irq, IRQF_SHARED, "cxadc", ctd);
 	if (rc < 0) {
 		cx_err("can't request irq (rc=%d)\n", rc);
-		goto fail1x;
+		goto fail1u;
 	}
 
 	/* register devices */
@@ -1292,6 +1354,8 @@ static int cxadc_probe(struct pci_dev *pci_dev,
 
 fail2:
 	free_irq(ctd->irq, ctd);
+fail1u:
+	iounmap(ctd->mmio);
 fail1x:
 	free_dma_buffer(ctd);
 	free_risc_inst_buffer(ctd);
@@ -1541,14 +1605,82 @@ static int cxadc_resume(struct pci_dev *pci_dev)
 
 MODULE_DEVICE_TABLE(pci, cxadc_pci_tbl);
 
+/*
+ * Shutdown runs inside device_shutdown() at poweroff/reboot -- after journald
+ * has stopped, in the phase nothing can record. The contract there is "quiesce
+ * DMA and interrupts, fast, touch as little as possible".
+ *
+ * cxadc_remove() is emphatically not that: it does sysfs churn, MMIO writes
+ * after partial teardown (agc_reset), chardev teardown and a free_irq() that
+ * blocks until in-flight handlers finish. Against a card that has stopped
+ * answering, any of those can stall forever, and a stall here leaves the
+ * machine powered on with nothing logged -- and can leave card state that
+ * wedges the following POST.
+ */
+static void cxadc_shutdown(struct pci_dev *pci_dev)
+{
+	struct cxadc *ctd = pci_get_drvdata(pci_dev);
+
+	if (ctd == NULL)
+		return;
+
+	/* Already faulted: do not issue more MMIO at it on the way out. */
+	if (READ_ONCE(ctd->disconnected))
+		return;
+
+	disable_card(ctd);		/* mask IRQs, halt RISC/DMA -- nothing else */
+	pci_disable_device(pci_dev);	/* drop bus mastering (config space only) */
+}
+
+/*
+ * Without these callbacks the PCI core logs "can't recover (no error_detected
+ * callback)" and gives up after resetting the link.
+ *
+ * cxadc cannot meaningfully recover a card mid-capture: the sample stream is
+ * already broken and there is no way to resynchronise it, and silently
+ * continuing would hand back a discontinuous capture -- worse than a failed
+ * one. So halt DMA, release anyone blocked in read(), and report the device as
+ * gone rather than let the core retry against hardware that is not answering.
+ */
+static pci_ers_result_t cxadc_error_detected(struct pci_dev *pci_dev,
+					     pci_channel_state_t state)
+{
+	struct cxadc *ctd = pci_get_drvdata(pci_dev);
+
+	if (ctd == NULL)
+		return PCI_ERS_RESULT_DISCONNECT;
+
+	WRITE_ONCE(ctd->disconnected, true);
+
+	/*
+	 * Only touch the card while the channel can still carry the write --
+	 * on a permanent failure MMIO is exactly what produced the error.
+	 */
+	if (state != pci_channel_io_perm_failure)
+		disable_card(ctd);
+
+	/* Release open()/read() waiters; no further IRQ is coming. */
+	wake_up_interruptible(&ctd->readQ);
+
+	cx_err("unrecoverable PCI error (state %u); DMA halted, device marked disconnected\n",
+	       (unsigned int)state);
+
+	return PCI_ERS_RESULT_DISCONNECT;
+}
+
+static const struct pci_error_handlers cxadc_err_handler = {
+	.error_detected = cxadc_error_detected,
+};
+
 static struct pci_driver cxadc_pci_driver = {
 	.name     = "cxadc",
 	.id_table = cxadc_pci_tbl,
 	.probe    = cxadc_probe,
 	.remove   = cxadc_remove,
-	.shutdown = cxadc_remove,
+	.shutdown = cxadc_shutdown,
 	.suspend  = cxadc_suspend,
 	.resume   = cxadc_resume,
+	.err_handler = &cxadc_err_handler,
 };
 
 static int __init cxadc_init_module(void)
