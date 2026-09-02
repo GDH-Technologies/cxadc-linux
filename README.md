@@ -521,7 +521,7 @@ mokutil --sb-state
 > [!NOTE]
 > If using **DKMS**, the driver automatically rebuilds on kernel update. Manual installs require reinstallation.
 
-Current DKMS package version: `1.0`
+Current DKMS package version: `1.1`
 
 **If driver stops loading after kernel update:**
 
@@ -621,6 +621,45 @@ If `/dev/cxadc0` doesn't exist after loading the driver:
    sudo modprobe cxadc
    ls -l /dev/cxadc*
    ```
+
+### Card Detected but Refused (Faulted Hardware)
+
+Since `1.1` the driver verifies a card answers MMIO before attaching to it, and
+refuses one that does not:
+
+```
+cxadc 0000:03:00.0: card is not answering mmio reads (all-ones); refusing to attach -- the chip is faulted or dead
+```
+
+The card still appears in `lspci` and still gets a BAR — its PCIe-to-PCI bridge
+is fine — but the CX chip behind it has stopped answering memory reads, so no
+`/dev/cxadcN` is created for it. Other healthy cards in the same machine are
+unaffected and keep their device nodes.
+
+> [!IMPORTANT]
+> This refusal is deliberate and you should not try to work around it. Arming
+> the DMA engine against such a card raises a **fatal** PCIe AER error that
+> resets the root port; at boot that hangs the machine during udev coldplug,
+> before anything can be logged, which looks exactly like a POST failure.
+
+**Confirming the diagnosis.** A healthy card exposes two PCI functions; a
+faulted one is usually missing the IR port function:
+
+```bash
+lspci -nn | grep -i conexant
+# healthy:  03:00.0 ... [14f1:8800]   and   03:00.4 ... [14f1:8804]
+# faulted:  03:00.0 ... [14f1:8800]   with no .4 entry
+```
+
+Check for the fatal error signature from an earlier boot, if the card had
+attached before:
+
+```bash
+journalctl -k -b -1 | grep -Ei "aer|cxadc"
+```
+
+A card in this state is not recoverable in software — replace it. Common causes
+are power-rail damage from a miswired clockgen mod, or ESD.
 
 ### Cannot Read from Device
 
