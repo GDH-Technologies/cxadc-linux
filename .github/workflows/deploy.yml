@@ -122,7 +122,7 @@ jobs:
 
           echo "Revision: ${old_rev} -> ${new_rev}"
 
-          echo "Checking DKMS version consistency (dkms.conf, kernel source, README)..."
+          echo "Checking DKMS version consistency (dkms.conf, kernel source, README, INSTALL)..."
           dkms_version="$(awk -F= '/^PACKAGE_VERSION=/{gsub(/"/,"",$2); print $2}' dkms.conf)"
           kernel_version="$(sed -nE 's/.*version ([0-9]+(\.[0-9]+)*)/\1/p' src/kernel/cxadc.c | head -n1)"
           readme_version="$(sed -nE 's/.*Current DKMS package version:[[:space:]]*`([^`]+)`.*/\1/p' README.md | head -n1)"
@@ -137,6 +137,9 @@ jobs:
             echo "  dkms.conf: ${dkms_version}" >&2
             echo "  src/kernel/cxadc.c: ${kernel_version}" >&2
             echo "  README.md: ${readme_version}" >&2
+            # INSTALL.md is compared above but was never printed, so a mismatch
+            # caused by it reported three identical versions and named nothing.
+            echo "  INSTALL.md: ${install_doc_version}" >&2
             exit 1
           fi
 
