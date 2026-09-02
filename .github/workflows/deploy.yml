@@ -37,12 +37,12 @@ on:
         description: "Build/install DKMS module for all /lib/modules kernels"
         required: false
         type: boolean
-        default: false
+        default: true
       prune_old_versions:
-        description: "Remove stale cxadc DKMS versions after successful install"
+        description: "Remove superseded cxadc DKMS versions, sources and orphaned modules"
         required: false
         type: boolean
-        default: false
+        default: true
 
 concurrency:
   group: deploy-cxadc-linux
@@ -93,8 +93,8 @@ jobs:
           echo "Force reinstall: ${FORCE_REINSTALL:-false}"
           echo "Reload module: ${RELOAD_MODULE:-false}"
           echo "DKMS target kernel: ${DKMS_TARGET_KERNEL:-}"
-          echo "DKMS install all kernels: ${DKMS_INSTALL_ALL_KERNELS:-false}"
-          echo "Prune old DKMS versions: ${PRUNE_OLD_DKMS_VERSIONS:-false}"
+          echo "DKMS install all kernels: ${DKMS_INSTALL_ALL_KERNELS:-true}"
+          echo "Prune old DKMS versions: ${PRUNE_OLD_DKMS_VERSIONS:-true}"
 
           if [ ! -d "${REPO_DIR}/.git" ]; then
             echo "Repo not found at ${REPO_DIR}" >&2
@@ -184,11 +184,22 @@ jobs:
           make clean
           make
 
+          # These three variables, in this order, are what
+          # /etc/sudoers.d/cxadc-linux-deploy matches on. sudo compares the
+          # command line positionally, so adding, removing or reordering one
+          # silently drops the NOPASSWD alias and every deploy starts prompting
+          # for a password. Change this line only alongside that sudoers file on
+          # cs0, cs1 and wm. (DKMS_PRUNE_DRY_RUN is deliberately absent for
+          # exactly this reason -- it is a root-shell-only knob.)
+          #
+          # The :- fallbacks are not decoration: workflow_run deploys leave
+          # inputs.* empty, so they, not the input defaults above, decide the
+          # behaviour of an automatic deploy.
           echo "Installing tools/config and DKMS module via root helper..."
           run_as_root env \
             DKMS_TARGET_KERNEL="${DKMS_TARGET_KERNEL:-}" \
-            DKMS_INSTALL_ALL_KERNELS="${DKMS_INSTALL_ALL_KERNELS:-false}" \
-            PRUNE_OLD_DKMS_VERSIONS="${PRUNE_OLD_DKMS_VERSIONS:-false}" \
+            DKMS_INSTALL_ALL_KERNELS="${DKMS_INSTALL_ALL_KERNELS:-true}" \
+            PRUNE_OLD_DKMS_VERSIONS="${PRUNE_OLD_DKMS_VERSIONS:-true}" \
             /usr/bin/bash "${REPO_DIR}/src/scripts/deploy_dkms_install.sh"
 
           if [ "${RELOAD_MODULE:-false}" = "true" ]; then

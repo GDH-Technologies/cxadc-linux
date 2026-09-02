@@ -149,7 +149,27 @@ run on a dirty tree or wrong branch, builds as the runner user, then calls
 the `/etc/sudoers.d/cxadc-linux-deploy` command aliases — changing the script
 path or name breaks passwordless sudo). Post-deploy it asserts DKMS is
 `installed` (not merely `built`), that `modinfo -n cxadc` resolves under
-`/updates/dkms/`, and that vermagic matches the running kernel.
+`updates/dkms/` **or** `extra/` (dkms.conf asks for the former; Fedora's DKMS
+overrides it and installs to the latter), and that vermagic matches the running
+kernel.
+
+The sudoers alias also pins the **env var list**: `deploy.yml` invokes
+`run_as_root env DKMS_TARGET_KERNEL=… DKMS_INSTALL_ALL_KERNELS=…
+PRUNE_OLD_DKMS_VERSIONS=… bash …`, and sudo matches that command line
+positionally. Adding, removing or reordering a variable there drops the NOPASSWD
+match and every rig starts prompting for a password. `DKMS_PRUNE_DRY_RUN` exists
+in the script for exactly this reason but is deliberately *not* in the CI path.
+
+`DKMS_INSTALL_ALL_KERNELS` and `PRUNE_OLD_DKMS_VERSIONS` both **default on**, in
+the script and in the `${VAR:-true}` fallbacks in `deploy.yml` (the fallbacks are
+what govern `workflow_run` deploys, where `inputs.*` is empty — changing only the
+input defaults is a no-op for automatic deploys). Together they converge every
+kernel in `/lib/modules` onto exactly one version and remove the rest: old DKMS
+versions, their `/usr/src/cxadc-<ver>` trees, state for absent kernels, and
+unowned `cxadc.ko*`. **Order is the safety property** — the prune is gated on
+every bootable kernel already carrying the current version, verified from `dkms
+status` rather than from what the build loop thinks it did. Pruning first would
+strip the driver from fallback kernels. Don't reorder those two phases.
 
 Module reload is **opt-in** (`reload_module` dispatch input) because unloading
 `cxadc` kills any capture in flight. Prefer landing a DKMS build and letting the

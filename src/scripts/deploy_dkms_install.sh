@@ -36,8 +36,20 @@ to_bool() {
 }
 
 dkms_target_kernel="${DKMS_TARGET_KERNEL:-$(uname -r)}"
-dkms_install_all_kernels="$(to_bool "${DKMS_INSTALL_ALL_KERNELS:-false}")"
-prune_old_dkms_versions="$(to_bool "${PRUNE_OLD_DKMS_VERSIONS:-false}")"
+# Both default ON. A host that keeps three kernels (Fedora's installonly_limit)
+# but only builds cxadc for the running one has two bootable fallback kernels
+# with no capture driver -- and, until this changed, with a *stale* driver,
+# because nothing ever removed the previous DKMS version. Converge every
+# installed kernel onto exactly one version and drop the rest.
+dkms_install_all_kernels="$(to_bool "${DKMS_INSTALL_ALL_KERNELS:-true}")"
+prune_old_dkms_versions="$(to_bool "${PRUNE_OLD_DKMS_VERSIONS:-true}")"
+# Deliberately NOT threaded through deploy.yml's `sudo env ...` invocation:
+# /etc/sudoers.d/cxadc-linux-deploy matches that command line positionally and
+# lists exactly DKMS_TARGET_KERNEL, DKMS_INSTALL_ALL_KERNELS and
+# PRUNE_OLD_DKMS_VERSIONS. A fourth variable would not match the alias, so
+# every deploy on every rig would start prompting for a password. Set this from
+# a real root shell when you want to preview a prune.
+prune_dry_run="$(to_bool "${DKMS_PRUNE_DRY_RUN:-false}")"
 
 if [[ -z "${dkms_name}" || -z "${dkms_version}" ]]; then
   echo "ERROR: failed to parse PACKAGE_NAME/PACKAGE_VERSION from dkms.conf" >&2
@@ -87,6 +99,7 @@ echo "DKMS deploy options:"
 echo "  target kernel: ${dkms_target_kernel}"
 echo "  install all kernels: ${dkms_install_all_kernels}"
 echo "  prune old versions: ${prune_old_dkms_versions}"
+echo "  prune dry run: ${prune_dry_run}"
 
 echo "Installing userspace tools/scripts from prebuilt artifacts..."
 for tool in leveladj levelmon cx-capture; do
@@ -131,14 +144,202 @@ mv "${dkms_source_staging}" "${dkms_source_root}"
 build_install_for_kernel() {
   local kernel_release="$1"
   if [[ ! -d "/lib/modules/${kernel_release}/build" ]]; then
-    echo "Skipping kernel ${kernel_release}: headers/build tree missing" >&2
+    # This used to `return 0` quietly. That silent skip is exactly what makes
+    # pruning dangerous: the stale version gets removed while this kernel never
+    # received the new one, leaving a bootable kernel with no cxadc at all.
+    # Nothing is decided here -- convergence is verified from `dkms status`
+    # below, which is authoritative about what actually landed.
+    echo "WARNING: kernel ${kernel_release}: no build tree (kernel-devel missing); cannot build" >&2
     return 0
   fi
   echo "Building DKMS module for kernel ${kernel_release}..."
-  "${dkms_bin}" build -m "${dkms_name}" -v "${dkms_version}" -k "${kernel_release}"
+  if ! "${dkms_bin}" build -m "${dkms_name}" -v "${dkms_version}" -k "${kernel_release}"; then
+    echo "WARNING: kernel ${kernel_release}: dkms build failed" >&2
+    return 0
+  fi
   echo "Installing DKMS module for kernel ${kernel_release}..."
-  "${dkms_bin}" install -m "${dkms_name}" -v "${dkms_version}" -k "${kernel_release}" --force
+  if ! "${dkms_bin}" install -m "${dkms_name}" -v "${dkms_version}" -k "${kernel_release}" --force; then
+    echo "WARNING: kernel ${kernel_release}: dkms install failed" >&2
+    return 0
+  fi
 }
+
+# ---------------------------------------------------------------------------
+# Convergence and prune helpers
+# ---------------------------------------------------------------------------
+
+# Kernels for which ${dkms_name}/${dkms_version} is reported 'installed'.
+# `dkms status` lines look like:  cxadc/1.1, 7.1.12-200.fc44.x86_64, x86_64: installed
+current_version_installed_kernels() {
+  "${dkms_bin}" status -m "${dkms_name}" -v "${dkms_version}" 2>/dev/null \
+    | awk -F'[,:]' '
+        /: *installed/ {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+          if ($2 != "") print $2
+        }
+      ' \
+    | sort -u
+}
+
+# Every version of this package DKMS currently knows about.
+all_dkms_versions() {
+  "${dkms_bin}" status -m "${dkms_name}" 2>/dev/null \
+    | awk -F'[/,]' -v name="${dkms_name}" '
+        $1 == name {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+          if ($2 != "") print $2
+        }
+      ' \
+    | sort -u
+}
+
+# "<version> <kernel>" for every registered pair, whatever its status.
+dkms_version_kernel_pairs() {
+  "${dkms_bin}" status -m "${dkms_name}" 2>/dev/null \
+    | sed -nE "s#^${dkms_name}/([^,]+), *([^,]+), *[^:]+:.*#\1 \2#p"
+}
+
+# Kernel directories under /lib/modules belonging to a real, bootable kernel.
+# modules.dep is written by every properly installed kernel; a leftover
+# directory holding nothing but an orphaned extra/cxadc.ko has none, and must
+# not be allowed to block pruning forever.
+bootable_kernels() {
+  local kdir kname
+  for kdir in /lib/modules/*/; do
+    kname="${kdir%/}"
+    kname="${kname##*/}"
+    [[ -f "/lib/modules/${kname}/modules.dep" ]] || continue
+    printf '%s\n' "${kname}"
+  done | sort
+}
+
+# Bootable kernels that did NOT end up with the current version. Derived from
+# end state rather than from what the build loop believes it did, so it catches
+# a missing build tree, a failed build, a partial install and a deliberately
+# narrow DKMS_INSTALL_ALL_KERNELS=false run alike.
+unconverged_kernels=()
+compute_unconverged_kernels() {
+  local -A have=()
+  local k
+  while IFS= read -r k; do
+    [[ -n "${k}" ]] && have["${k}"]=1
+  done < <(current_version_installed_kernels)
+
+  unconverged_kernels=()
+  while IFS= read -r k; do
+    [[ -n "${k}" ]] || continue
+    [[ -n "${have[${k}]:-}" ]] && continue
+    unconverged_kernels+=("${k}")
+  done < <(bootable_kernels)
+}
+
+# Remove every trace of superseded cxadc state. Only ever called once every
+# bootable kernel carries the current version, so no stage here can be the
+# thing that leaves a kernel driverless.
+prune_stale_dkms_state() {
+  local did_remove="false"
+  local prefix="  "
+  if [[ "${prune_dry_run}" == "true" ]]; then
+    prefix="  [dry-run] "
+  fi
+
+  # -- a. superseded package versions ---------------------------------------
+  local stale_version
+  while IFS= read -r stale_version; do
+    [[ -n "${stale_version}" ]] || continue
+    [[ "${stale_version}" == "${dkms_version}" ]] && continue
+    echo "${prefix}remove version: ${dkms_name}/${stale_version}"
+    if [[ "${prune_dry_run}" != "true" ]]; then
+      "${dkms_bin}" remove -m "${dkms_name}" -v "${stale_version}" --all || true
+    fi
+    did_remove="true"
+  done < <(all_dkms_versions)
+
+  # -- b. stale /usr/src trees ----------------------------------------------
+  # `dkms remove` leaves these behind. A surviving tree can be re-registered by
+  # a stray `dkms add`, resurrecting the version we just removed.
+  local src_tree src_version
+  for src_tree in "/usr/src/${dkms_name}-"*; do
+    [[ -d "${src_tree}" ]] || continue
+    src_version="${src_tree##*/}"
+    src_version="${src_version#"${dkms_name}-"}"
+    [[ -n "${src_version}" ]] || continue
+    [[ "${src_version}" == "${dkms_version}" ]] && continue
+    echo "${prefix}remove source tree: ${src_tree}"
+    if [[ "${prune_dry_run}" != "true" ]]; then
+      rm -rf -- "${src_tree}"
+    fi
+    did_remove="true"
+  done
+
+  # -- c. state for kernels that no longer exist ----------------------------
+  # These accumulate as the distro rolls kernels past installonly_limit.
+  local pair_version pair_kernel
+  while read -r pair_version pair_kernel; do
+    [[ -n "${pair_version}" && -n "${pair_kernel}" ]] || continue
+    [[ -d "/lib/modules/${pair_kernel}" ]] && continue
+    echo "${prefix}remove orphaned entry: ${dkms_name}/${pair_version} for absent kernel ${pair_kernel}"
+    if [[ "${prune_dry_run}" != "true" ]]; then
+      "${dkms_bin}" remove -m "${dkms_name}" -v "${pair_version}" -k "${pair_kernel}" || true
+    fi
+    did_remove="true"
+  done < <(dkms_version_kernel_pairs)
+
+  local kdir kname
+  for kdir in "/var/lib/dkms/${dkms_name}/kernel-"*; do
+    [[ -d "${kdir}" ]] || continue
+    kname="${kdir##*/}"
+    kname="${kname#kernel-}"
+    kname="${kname%-*}"
+    [[ -n "${kname}" ]] || continue
+    [[ -d "/lib/modules/${kname}" ]] && continue
+    echo "${prefix}remove orphaned dkms state: ${kdir}"
+    if [[ "${prune_dry_run}" != "true" ]]; then
+      rm -rf -- "${kdir}"
+    fi
+    did_remove="true"
+  done
+
+  # -- d. cxadc.ko with no live DKMS entry ----------------------------------
+  # Basenames are matched literally: only this package's module is ever a
+  # candidate, never a neighbouring one.
+  local -A owned=()
+  local k
+  while IFS= read -r k; do
+    [[ -n "${k}" ]] && owned["${k}"]=1
+  done < <(current_version_installed_kernels)
+
+  local -A depmod_needed=()
+  local ko ko_kernel
+  for ko in "/lib/modules/"*"/extra/${dkms_name}.ko" \
+            "/lib/modules/"*"/extra/${dkms_name}.ko."* \
+            "/lib/modules/"*"/updates/dkms/${dkms_name}.ko" \
+            "/lib/modules/"*"/updates/dkms/${dkms_name}.ko."*; do
+    [[ -f "${ko}" ]] || continue
+    ko_kernel="${ko#/lib/modules/}"
+    ko_kernel="${ko_kernel%%/*}"
+    [[ -n "${owned[${ko_kernel}]:-}" ]] && continue
+    echo "${prefix}remove orphaned module: ${ko}"
+    if [[ "${prune_dry_run}" != "true" ]]; then
+      rm -f -- "${ko}"
+      depmod_needed["${ko_kernel}"]=1
+    fi
+    did_remove="true"
+  done
+
+  # depmod per affected kernel: the unconditional `depmod -a` further down only
+  # rebuilds the running kernel's dependency files.
+  for k in "${!depmod_needed[@]}"; do
+    echo "${prefix}depmod for ${k}"
+    "${depmod_bin}" -a "${k}" || true
+  done
+
+  if [[ "${did_remove}" != "true" ]]; then
+    echo "  nothing to prune"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 
 if [[ "${dkms_install_all_kernels}" == "true" ]]; then
   mapfile -t installed_kernels < <(find /lib/modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
@@ -146,30 +347,74 @@ if [[ "${dkms_install_all_kernels}" == "true" ]]; then
     echo "ERROR: no kernels found under /lib/modules" >&2
     exit 1
   fi
+  # Target kernel first, so the kernel this host is actually running is
+  # converged before any slower back-fill can go wrong.
+  ordered_kernels=()
   for kernel_release in "${installed_kernels[@]}"; do
+    [[ "${kernel_release}" == "${dkms_target_kernel}" ]] && ordered_kernels+=("${kernel_release}")
+  done
+  for kernel_release in "${installed_kernels[@]}"; do
+    [[ "${kernel_release}" == "${dkms_target_kernel}" ]] && continue
+    ordered_kernels+=("${kernel_release}")
+  done
+  for kernel_release in "${ordered_kernels[@]}"; do
     build_install_for_kernel "${kernel_release}"
   done
 else
   build_install_for_kernel "${dkms_target_kernel}"
 fi
 
-if [[ "${prune_old_dkms_versions}" == "true" ]]; then
-  echo "Pruning stale DKMS versions for ${dkms_name} (keeping ${dkms_version})..."
-  while IFS= read -r stale_version; do
-    [[ -n "${stale_version}" ]] || continue
-    [[ "${stale_version}" == "${dkms_version}" ]] && continue
-    echo "Removing stale version ${dkms_name}/${stale_version}"
-    "${dkms_bin}" remove -m "${dkms_name}" -v "${stale_version}" --all || true
-  done < <(
-    "${dkms_bin}" status -m "${dkms_name}" \
-      | awk -F'[/,]' -v name="${dkms_name}" '
-          $1 == name {
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
-            if ($2 != "") print $2
-          }
-        ' \
-      | sort -u
-  )
+compute_unconverged_kernels
+
+if [[ "${prune_old_dkms_versions}" != "true" ]]; then
+  echo "Skipping prune (PRUNE_OLD_DKMS_VERSIONS=false)"
+elif [[ "${#unconverged_kernels[@]}" -gt 0 ]]; then
+  # Refuse to remove the old version while any bootable kernel is still
+  # relying on it. A noisy `dkms status` is a far better outcome than a
+  # fallback kernel that boots without a capture driver.
+  echo "Skipping prune: ${dkms_name}/${dkms_version} is not installed for:" >&2
+  for kernel_release in "${unconverged_kernels[@]}"; do
+    echo "  - ${kernel_release}" >&2
+  done
+  echo "Removing older versions now would leave those kernels with no ${dkms_name}." >&2
+else
+  echo "Pruning stale ${dkms_name} DKMS state (keeping ${dkms_version})..."
+  prune_stale_dkms_state
+
+  # Post-prune safety net. Removing an old version touches shared paths --
+  # /lib/modules/<k>/extra/${dkms_name}.ko* is a single file that whichever
+  # version installed last owns -- so re-derive convergence from scratch and
+  # confirm a module actually exists on disk for every bootable kernel. Captures
+  # are irreplaceable; a prune that quietly took the driver with it must be a
+  # loud failure, not a surprise at the next boot.
+  if [[ "${prune_dry_run}" != "true" ]]; then
+    compute_unconverged_kernels
+    if [[ "${#unconverged_kernels[@]}" -gt 0 ]]; then
+      echo "ERROR: prune left these kernels without ${dkms_name}/${dkms_version}:" >&2
+      for kernel_release in "${unconverged_kernels[@]}"; do
+        echo "  - ${kernel_release}" >&2
+      done
+      echo "Re-run this helper to rebuild them before booting those kernels." >&2
+      exit 1
+    fi
+
+    missing_modules=()
+    while IFS= read -r kernel_release; do
+      [[ -n "${kernel_release}" ]] || continue
+      if ! compgen -G "/lib/modules/${kernel_release}/extra/${dkms_name}.ko*" >/dev/null \
+         && ! compgen -G "/lib/modules/${kernel_release}/updates/dkms/${dkms_name}.ko*" >/dev/null; then
+        missing_modules+=("${kernel_release}")
+      fi
+    done < <(bootable_kernels)
+    if [[ "${#missing_modules[@]}" -gt 0 ]]; then
+      echo "ERROR: ${dkms_name} reports installed but no module file exists for:" >&2
+      for kernel_release in "${missing_modules[@]}"; do
+        echo "  - ${kernel_release}" >&2
+      done
+      exit 1
+    fi
+    echo "Verified ${dkms_name}/${dkms_version} present for every bootable kernel."
+  fi
 fi
 
 "${depmod_bin}" -a
@@ -180,5 +425,30 @@ make -C "${repo_dir}" install-config
 echo "Reloading udev rules for cxadc devices..."
 udevadm control --reload-rules
 udevadm trigger -c add -s cxadc || true
+
+# Failing here rather than mid-flight: everything above is idempotent and
+# leaves the host coherent, so a partial deploy still has working tools, config
+# and udev rules. Exiting non-zero keeps deploy.yml from writing its stamp
+# file, so the next run retries instead of skipping.
+#
+# Only fatal when we set out to converge every kernel. A deliberately narrow
+# DKMS_INSTALL_ALL_KERNELS=false run is expected to leave other kernels alone;
+# it still declines to prune (above), but it is not a failure.
+if [[ "${#unconverged_kernels[@]}" -gt 0 ]]; then
+  if [[ "${dkms_install_all_kernels}" == "true" ]]; then
+    echo "ERROR: ${dkms_name}/${dkms_version} is not installed for every bootable kernel:" >&2
+    for kernel_release in "${unconverged_kernels[@]}"; do
+      echo "  - ${kernel_release}" >&2
+    done
+    echo "Install the matching kernel-devel package and re-run this helper." >&2
+    echo "Until then those kernels have no ${dkms_name}: do not boot them expecting" >&2
+    echo "a capture card." >&2
+    exit 1
+  fi
+  echo "NOTE: ${dkms_name}/${dkms_version} is not installed for:" >&2
+  for kernel_release in "${unconverged_kernels[@]}"; do
+    echo "  - ${kernel_release}" >&2
+  done
+fi
 
 echo "Root deploy helper completed"
