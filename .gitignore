@@ -3,6 +3,11 @@
 .vscode/
 .directory
 
+# Agent tooling: local Claude Code state and the git worktrees it creates.
+# Untracked files here make every checkout dirty, and deploy.yml refuses to
+# deploy a dirty tree -- which is what silently blocked the 1.1 rollout on wm.
+/.claude/
+
 # Userland build output
 /build/
 /leveladj

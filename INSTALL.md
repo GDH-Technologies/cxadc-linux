@@ -1,7 +1,7 @@
 ## Fedora DKMS Installation (cxadc)
 
 These instructions are specific to Fedora and the current repository layout
-(`src/kernel/` module source, DKMS package version `1.0`).
+(`src/kernel/` module source, DKMS package version `1.1`).
 
 ### 1) Prerequisites
 
@@ -51,21 +51,28 @@ sudo dkms remove -m cxadc -v 0.5 --all || true
 sudo rm -rf /usr/src/cxadc-0.5
 ```
 
+And clear any prior `1.0` install, which is what the fleet ran before `1.1`:
+
+```bash
+sudo dkms remove -m cxadc -v 1.0 --all || true
+sudo rm -rf /usr/src/cxadc-1.0
+```
+
 ### 4) Stage source for DKMS
 
 Copy this repository into DKMS source path:
 
 ```bash
-sudo mkdir -p /usr/src/cxadc-1.0
-sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.0/
+sudo mkdir -p /usr/src/cxadc-1.1
+sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.1/
 ```
 
 ### 5) Build and install with DKMS
 
 ```bash
-sudo dkms add -m cxadc -v 1.0
-sudo dkms build -m cxadc -v 1.0
-sudo dkms install -m cxadc -v 1.0
+sudo dkms add -m cxadc -v 1.1
+sudo dkms build -m cxadc -v 1.1
+sudo dkms install -m cxadc -v 1.1
 sudo depmod -a
 ```
 
@@ -95,7 +102,7 @@ lsmod | grep cxadc
 ls -l /dev/cxadc*
 ```
 
-Expected: `cxadc/1.0` shown by DKMS and at least `/dev/cxadc0` present when
+Expected: `cxadc/1.1` shown by DKMS and at least `/dev/cxadc0` present when
 supported hardware is installed.
 
 If you define host-specific udev aliases (for example `/dev/cx/vcr0-video`),
@@ -122,9 +129,9 @@ scripts into `/usr/local/bin` by default.
 DKMS should auto-rebuild at kernel install/boot. To force a refresh manually:
 
 ```bash
-sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.0/
-sudo dkms build -m cxadc -v 1.0
-sudo dkms install -m cxadc -v 1.0 --force
+sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.1/
+sudo dkms build -m cxadc -v 1.1
+sudo dkms install -m cxadc -v 1.1 --force
 sudo depmod -a
 ```
 
@@ -133,13 +140,13 @@ sudo depmod -a
 Remove DKMS module:
 
 ```bash
-sudo dkms remove -m cxadc -v 1.0 --all
+sudo dkms remove -m cxadc -v 1.1 --all
 ```
 
 Optional cleanup of staged source:
 
 ```bash
-sudo rm -rf /usr/src/cxadc-1.0
+sudo rm -rf /usr/src/cxadc-1.1
 ```
 
 ### Sudoers for CI/CD
