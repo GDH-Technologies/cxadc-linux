@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * cxadc - CX2388x ADC DMA driver for Linux, version 1.1
+ * cxadc - CX2388x ADC DMA driver for Linux, version 1.2
  *
  * Copyright (C) 2005-2007 Hew How Chee <how_chee@yahoo.com>
  * Copyright (C) 2013-2015 Chad Page <Chad.Page@gmail.com>
@@ -32,6 +32,7 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/ratelimit.h>
+#include <linux/idr.h>
 
 /*
  * From Linux 4.21, dma_alloc_coherent always returns zeroed memory,
@@ -72,19 +73,23 @@
 #define IRQ_PERIOD_IN_PAGES (0x200000 >> PAGE_SHIFT)
 
 struct cxadc {
-	/* linked list */
+	/* registry (see cxadcs / cxadc_list_lock) */
 	struct cxadc *next;
 	/* device info */
-	struct cdev cdev;
+	struct cdev *cdev;	/* cdev_alloc()'d: may outlive ctd while a file is open */
+	dev_t devt;
 	struct pci_dev *pci;
 	unsigned int   irq;
 	unsigned int  mem;
 	unsigned int  *mmio;
-	struct kref refcnt;
 
-	/* locking */
+	/*
+	 * One open per card. in_use is written under lock; cxadc_remove()
+	 * waits on close_waitq for it to clear before freeing anything.
+	 */
 	bool in_use;
 	struct mutex lock;
+	wait_queue_head_t close_waitq;
 
 	unsigned int    risc_inst_buff_size;
 	unsigned int	*risc_inst_virt;
@@ -125,9 +130,11 @@ struct cxadc {
 
 	/*
 	 * Set once the PCI core reports an unrecoverable error for this device
-	 * (see cxadc_error_detected). One-way for the life of the module: the
-	 * card is gone, so open() refuses it and blocked readers are released
-	 * with an error instead of waiting on an IRQ that will never arrive.
+	 * (cxadc_error_detected) or the device is being removed (cxadc_remove).
+	 * One-way for the life of the object: the card is gone, so open()
+	 * refuses it, read() stops touching the hardware, and blocked readers
+	 * are released with an error instead of waiting on an IRQ that will
+	 * never arrive.
 	 */
 	bool disconnected;
 
@@ -506,8 +513,15 @@ static struct attribute_group mycxadc_group = {
  * end boiler plate
  */
 
+/*
+ * Registry of probed cards, walked by open() to map a device number to its
+ * card. cxadc_list_lock covers every walk, insert and unlink; ctd->lock nests
+ * inside it (open() takes both, in that order).
+ */
 static struct cxadc *cxadcs;
-static unsigned int cxcount;
+static DEFINE_MUTEX(cxadc_list_lock);
+/* Minor numbers. Lowest free id first, so a rebound card gets its cxadcN back. */
+static DEFINE_IDA(cxadc_minors);
 /*
  * linux supports 32 devices per bus, 8 functions per device
  */
@@ -633,6 +647,11 @@ static void free_risc_inst_buffer(struct cxadc *ctd)
 static int make_risc_instructions(struct cxadc *ctd)
 {
 	int page, wr;
+	/*
+	 * The RISC engine's address fields are 32-bit. Narrowing dma_addr_t
+	 * here is only correct because probe sets a 32-bit DMA mask, which
+	 * guarantees every page below lives under 4 GB.
+	 */
 	unsigned int dma_addr;
 	unsigned int *pp = (unsigned int *)ctd->risc_inst_virt;
 
@@ -673,32 +692,40 @@ static int make_risc_instructions(struct cxadc *ctd)
 
 static int cxadc_char_open(struct inode *inode, struct file *file)
 {
-	int minor = iminor(inode);
-	struct cxadc *ctd = container_of(inode->i_cdev, struct cxadc, cdev);
+	struct cxadc *ctd;
 	unsigned long longtenxfsc, longPLLboth, longPLLint;
 	int PLLint, PLLfrac, PLLfin, SConv, rv;
 
+	/*
+	 * Look the card up and claim it under the registry lock, so a
+	 * concurrent cxadc_remove() either finds in_use set and waits for our
+	 * release(), or has already unlinked the card and we never find it.
+	 */
+	mutex_lock(&cxadc_list_lock);
 	for (ctd = cxadcs; ctd != NULL; ctd = ctd->next)
-		if (MINOR(ctd->cdev.dev) == minor)
+		if (ctd->devt == inode->i_rdev)
 			break;
-	if (ctd == NULL)
+	if (ctd == NULL) {
+		mutex_unlock(&cxadc_list_lock);
 		return -ENODEV;
-
-	/* The card raised an unrecoverable PCI error; it is not coming back. */
-	if (READ_ONCE(ctd->disconnected))
-		return -ENODEV;
-
-	mutex_lock(&ctd->lock);
-	if (ctd->in_use) {
-		mutex_unlock(&ctd->lock);
-		return -EBUSY;
 	}
 
-	kref_get(&ctd->refcnt);
-	file->private_data = ctd;
-
-	ctd->in_use = true;
+	mutex_lock(&ctd->lock);
+	if (READ_ONCE(ctd->disconnected)) {
+		/* Faulted (AER) or being removed; it is not coming back. */
+		rv = -ENODEV;
+	} else if (ctd->in_use) {
+		rv = -EBUSY;
+	} else {
+		ctd->in_use = true;
+		rv = 0;
+	}
 	mutex_unlock(&ctd->lock);
+	mutex_unlock(&cxadc_list_lock);
+	if (rv)
+		return rv;
+
+	file->private_data = ctd;
 
 	/* source select (see datasheet on how to change adc source) */
 	ctd->vmux &= 3;/* default vmux=1 */
@@ -804,6 +831,7 @@ static int cxadc_char_open(struct inode *inode, struct file *file)
 		mutex_lock(&ctd->lock);
 		ctd->in_use = false;
 		mutex_unlock(&ctd->lock);
+		wake_up(&ctd->close_waitq);
 
 		return rv ? rv : -ENODEV;
 	}
@@ -824,8 +852,8 @@ static int cxadc_char_release(struct inode *inode, struct file *file)
 	struct cxadc *ctd = file->private_data;
 
 	/*
-	 * A reader that just took -EIO from a disconnected card lands here;
-	 * do not issue MMIO at hardware that is no longer answering.
+	 * A reader that just took -EIO from a disconnected or removed card
+	 * lands here; do not issue MMIO at hardware that is no longer ours.
 	 */
 	if (!READ_ONCE(ctd->disconnected))
 		cx_write(MO_PCI_INTMSK, 0);
@@ -833,6 +861,8 @@ static int cxadc_char_release(struct inode *inode, struct file *file)
 	mutex_lock(&ctd->lock);
 	ctd->in_use = false;
 	mutex_unlock(&ctd->lock);
+	/* cxadc_remove() may be waiting for this. */
+	wake_up(&ctd->close_waitq);
 	return 0;
 }
 
@@ -898,6 +928,13 @@ static ssize_t cxadc_char_read(struct file *file, char __user *tgt,
 			ctd->level = 0;
 		if (ctd->level > 31)
 			ctd->level = 31;
+		/*
+		 * Faulted or being removed: hand back what was copied (it all
+		 * came from pages that are still ours -- nothing is freed until
+		 * we release) and do not touch the hardware again.
+		 */
+		if (READ_ONCE(ctd->disconnected))
+			return rv ? rv : -EIO;
 		cx_write(MO_AGC_GAIN_ADJ4, (ctd->sixdb<<23)|(0<<22)|(0<<21)|(ctd->level<<16)|(0xff<<8)|(0x0<<0));
 		cx_write(MO_AGC_SYNC_TIP3, (0x1e48<<16)|(0xff<<8)|(ctd->center_offset));
 
@@ -944,6 +981,9 @@ static long cxadc_char_ioctl(struct file *file, unsigned int cmd, unsigned long 
 {
 	struct cxadc *ctd = file->private_data;
 	int ret = 0;
+
+	if (READ_ONCE(ctd->disconnected))
+		return -ENODEV;
 
 	if (cmd == 0x12345670) {
 		int gain = arg;
@@ -1042,11 +1082,24 @@ static int cxadc_probe(struct pci_dev *pci_dev,
 		return -EIO;
 	}
 
+	/*
+	 * The RISC program addresses DMA pages with 32-bit fields
+	 * (make_risc_instructions). Say so, instead of relying on the PCI
+	 * default: an allocation that cannot be satisfied below 4 GB then
+	 * fails the probe rather than silently DMAing into the wrong page.
+	 */
+	rc = dma_set_mask_and_coherent(&pci_dev->dev, DMA_BIT_MASK(32));
+	if (rc) {
+		dev_err(&pci_dev->dev, "cxadc: no suitable DMA mask (rc=%d)\n", rc);
+		goto fail_disable;
+	}
+
 	if (!request_mem_region(pci_resource_start(pci_dev, 0),
 				pci_resource_len(pci_dev, 0),
 				"cxadc")) {
 		dev_err(&pci_dev->dev, "cxadc: request memory region failed\n");
-		return -EBUSY;
+		rc = -EBUSY;
+		goto fail_disable;
 	}
 
 	ctd = kmalloc(sizeof(*ctd), GFP_KERNEL);
@@ -1057,10 +1110,12 @@ static int cxadc_probe(struct pci_dev *pci_dev,
 	}
 	memset(ctd, 0, sizeof(*ctd));
 
-	if (cxcount >= CXCOUNT_MAX) {
-		dev_err(&pci_dev->dev, "cxadc: only 256 cards are supported\n");
-		return -EBUSY;
+	rc = ida_alloc_max(&cxadc_minors, CXCOUNT_MAX - 1, GFP_KERNEL);
+	if (rc < 0) {
+		dev_err(&pci_dev->dev, "cxadc: only %d cards are supported\n", CXCOUNT_MAX);
+		goto fail1;
 	}
+	ctd->devt = MKDEV(cxadc_major, rc);
 
 	ctd->pci = pci_dev;
 	ctd->irq = pci_dev->irq;
@@ -1085,7 +1140,7 @@ static int cxadc_probe(struct pci_dev *pci_dev,
 		cx_err("cannot create sysfs attributes\n");
 		/* something is very wrong if we can't create sysfs files */
 		rc = -ENOMEM;
-		goto fail1;
+		goto fail_ida;
 	}
 
 	/* We can use cx_err/cx_info from here, now ctd has been set up. */
@@ -1160,7 +1215,7 @@ static int cxadc_probe(struct pci_dev *pci_dev,
 
 	ctd->in_use = false;
 	mutex_init(&ctd->lock);
-	kref_init(&ctd->refcnt);
+	init_waitqueue_head(&ctd->close_waitq);
 
 	init_waitqueue_head(&ctd->readQ);
 
@@ -1245,21 +1300,38 @@ static int cxadc_probe(struct pci_dev *pci_dev,
 	rc = request_irq(ctd->irq, cxadc_irq, IRQF_SHARED, "cxadc", ctd);
 	if (rc < 0) {
 		cx_err("can't request irq (rc=%d)\n", rc);
-		goto fail1u;
+		goto fail_hw;
 	}
 
-	/* register devices */
-	cdev_init(&ctd->cdev, &cxadc_char_fops);
-	if (cdev_add(&ctd->cdev, MKDEV(cxadc_major, cxcount), 1)) {
+	/*
+	 * Register the character device. The cdev is heap-allocated rather
+	 * than embedded: the VFS drops its reference to the cdev (cdev_put)
+	 * only after .release returns, so an embedded one would still be
+	 * touched after cxadc_remove() has freed ctd. A cdev_alloc()'d cdev
+	 * is released by its own kobject when the last reference goes.
+	 */
+	ctd->cdev = cdev_alloc();
+	if (ctd->cdev == NULL) {
+		cx_err("cannot allocate cdev\n");
+		rc = -ENOMEM;
+		goto fail2;
+	}
+	ctd->cdev->owner = THIS_MODULE;
+	ctd->cdev->ops = &cxadc_char_fops;
+	if (cdev_add(ctd->cdev, ctd->devt, 1)) {
 		cx_err("failed to register device\n");
+		kobject_put(&ctd->cdev->kobj);
 		rc = -EIO;
 		goto fail2;
 	}
 
-	if (IS_ERR(device_create(cxadc_class, &pci_dev->dev,
-			 MKDEV(cxadc_major, cxcount), NULL,
-			 "cxadc%u", cxcount)))
-		dev_err(&pci_dev->dev, "can't create device\n");
+	if (IS_ERR(device_create(cxadc_class, &pci_dev->dev, ctd->devt, NULL,
+				 "cxadc%u", MINOR(ctd->devt)))) {
+		cx_err("cannot create device node\n");
+		cdev_del(ctd->cdev);
+		rc = -EIO;
+		goto fail2;
+	}
 
 	cx_info("char dev register ok\n");
 
@@ -1342,10 +1414,11 @@ static int cxadc_probe(struct pci_dev *pci_dev,
 	/* i2c sda/scl set to high and use software control */
 	cx_write(MO_I2C, 3);
 
-	/* hook into linked list */
+	/* Publish in the registry; open() can find the card from here on. */
+	mutex_lock(&cxadc_list_lock);
 	ctd->next = cxadcs;
 	cxadcs = ctd;
-	cxcount++;
+	mutex_unlock(&cxadc_list_lock);
 
 	pci_set_drvdata(pci_dev, ctd);
 	cx_write(MO_VID_INTMSK, INTERRUPT_MASK);
@@ -1354,6 +1427,10 @@ static int cxadc_probe(struct pci_dev *pci_dev,
 
 fail2:
 	free_irq(ctd->irq, ctd);
+fail_hw:
+	/* The RISC engine is running by now: stop it before its pages go. */
+	disable_card(ctd);
+	pci_clear_master(pci_dev);
 fail1u:
 	iounmap(ctd->mmio);
 fail1x:
@@ -1361,11 +1438,15 @@ fail1x:
 	free_risc_inst_buffer(ctd);
 fail1s:
 	sysfs_remove_group(&pci_dev->dev.kobj, &mycxadc_group);
+fail_ida:
+	ida_free(&cxadc_minors, MINOR(ctd->devt));
 fail1:
 	kfree(ctd);
 fail0:
 	release_mem_region(pci_resource_start(pci_dev, 0),
 			   pci_resource_len(pci_dev, 0));
+fail_disable:
+	pci_disable_device(pci_dev);
 	return rc;
 }
 
@@ -1399,40 +1480,58 @@ static void agc_reset(struct cxadc *ctd)
 static void cxadc_remove(struct pci_dev *pci_dev)
 {
 	struct cxadc *ctd = pci_get_drvdata(pci_dev);
-	/* struct cxadc *walk; */
+	struct cxadc **pp;
+	/*
+	 * Snapshot at entry: we set disconnected ourselves below, and a card
+	 * that is merely being unbound should still get its AGC reset.
+	 */
+	const bool faulted = READ_ONCE(ctd->disconnected);
 
-	disable_card(ctd);
+	/*
+	 * Quiesce. disable_card() is MMIO and does nothing useful on a card
+	 * that reads all-ones; pci_clear_master() is config space and stops
+	 * bus-mastering DMA regardless, so it is what actually guarantees the
+	 * RISC engine cannot write into pages we free below.
+	 */
+	if (!faulted)
+		disable_card(ctd);
+	pci_clear_master(pci_dev);
 
-	/* removes our sysfs files */
 	sysfs_remove_group(&pci_dev->dev.kobj, &mycxadc_group);
-	agc_reset(ctd);
-	device_destroy(cxadc_class, MKDEV(cxadc_major, ctd->cdev.dev));
-	cdev_del(&ctd->cdev);
 
-	/* free resources */
-	free_risc_inst_buffer(ctd);
+	/* Unpublish: no new open() can find the card from here on. */
+	mutex_lock(&cxadc_list_lock);
+	for (pp = &cxadcs; *pp != NULL; pp = &(*pp)->next) {
+		if (*pp == ctd) {
+			*pp = ctd->next;
+			break;
+		}
+	}
+	mutex_unlock(&cxadc_list_lock);
+
+	device_destroy(cxadc_class, ctd->devt);
+	cdev_del(ctd->cdev);
+	ida_free(&cxadc_minors, MINOR(ctd->devt));
+
+	/*
+	 * Evict the opener, then wait for it. read() checks disconnected
+	 * between pages and gives up; release() clears in_use and wakes us.
+	 * Nothing owned by ctd is freed while a file is open.
+	 */
+	WRITE_ONCE(ctd->disconnected, true);
+	wake_up_interruptible(&ctd->readQ);
+	wait_event(ctd->close_waitq, !READ_ONCE(ctd->in_use));
+
 	free_irq(ctd->irq, ctd);
-	free_dma_buffer(ctd);
+	if (!faulted)
+		agc_reset(ctd);
 	iounmap(ctd->mmio);
+	free_risc_inst_buffer(ctd);
+	free_dma_buffer(ctd);
 	release_mem_region(pci_resource_start(pci_dev, 0),
 			   pci_resource_len(pci_dev, 0));
 
-	/* remove from linked list */
-	/* CAUSES KERNEL PANIC
-	 * if (ctd == cxadcs) {
-	 *	cxadcs = NULL;
-	 * } else {
-	 *	for (walk = cxadcs; walk->next != ctd; walk = walk->next)
-	 *		;
-	 *	walk->next = ctd->next;
-	 * }
-	 */
-
-	cxcount--;
-
-	cx_info("reset drv data\n");
 	pci_set_drvdata(pci_dev, NULL);
-	cx_info("reset drv ok\n");
 	kfree(ctd);
 	pci_disable_device(pci_dev);
 }
@@ -1441,8 +1540,11 @@ static int cxadc_suspend(struct pci_dev *pci_dev, pm_message_t state)
 {
 	struct cxadc *ctd = pci_get_drvdata(pci_dev);
 
-	disable_card(ctd);
-	agc_reset(ctd);
+	/* A faulted card is not answering MMIO; do not poke it on the way down. */
+	if (!READ_ONCE(ctd->disconnected)) {
+		disable_card(ctd);
+		agc_reset(ctd);
+	}
 	pci_save_state(pci_dev);
 	pci_set_power_state(pci_dev, pci_choose_state(pci_dev, state));
 	pci_disable_device(pci_dev);
@@ -1460,10 +1562,19 @@ static int cxadc_resume(struct pci_dev *pci_dev)
 	int PLLint, PLLfrac, PLLfin, SConv, intstat, ret;
 
 	ret = pci_enable_device(pci_dev);
+	if (ret) {
+		cx_err("cannot re-enable device after resume (rc=%d)\n", ret);
+		return ret;
+	}
 	pci_set_power_state(pci_dev, PCI_D0);
 	pci_restore_state(pci_dev);
-	/* init hw */
 	pci_set_master(pci_dev);
+
+	/* Faulted before suspend: leave it quiesced rather than re-arm DMA on it. */
+	if (READ_ONCE(ctd->disconnected))
+		return 0;
+
+	/* init hw */
 	disable_card(ctd);
 
 	/* we use 16kbytes of FIFO buffer */
@@ -1597,7 +1708,11 @@ static int cxadc_resume(struct pci_dev *pci_dev)
 	/* i2c sda/scl set to high and use software control */
 	cx_write(MO_I2C, 3);
 
-	ret = request_irq(ctd->irq, cxadc_irq, IRQF_SHARED, "cxadc", ctd);
+	/*
+	 * The IRQ registered in probe survives suspend. Requesting it again
+	 * here stacked a second handler with the same dev_id on every resume,
+	 * which free_irq() in cxadc_remove() could then only half undo.
+	 */
 	ctd->err_irq_masked = false;
 	cx_write(MO_VID_INTMSK, INTERRUPT_MASK);
 	return 0;
@@ -1730,6 +1845,7 @@ static void __exit cxadc_cleanup_module(void)
 
 	unregister_chrdev_region(MKDEV(cxadc_major, 0), CXCOUNT_MAX);
 
+	ida_destroy(&cxadc_minors);
 	class_destroy(cxadc_class);
 }
 

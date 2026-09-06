@@ -75,7 +75,7 @@ make clean
 - Do not load `cxadc` and stock `cx88` drivers at the same time.
 - Preserve sysfs parameter compatibility and naming in `/sys/class/cxadc/*/device/parameters/`.
 - Avoid disruptive behavior in tools that might interfere with active capture sessions. In particular, diagnostic tools (`cxadc-status`) must never open `/dev/cxadcN`; inspect sysfs/procfs only.
-- Keep DKMS installation instructions consistent with README (current package version is `1.1`).
+- Keep DKMS installation instructions consistent with README (current package version is `1.2`). The marker lives in four files — `dkms.conf`, the `src/kernel/cxadc.c` header comment, `README.md`, `INSTALL.md` — and CI/deploy abort on mismatch.
 - `deploy_dkms_install.sh` converges **every** kernel in `/lib/modules` onto the current DKMS version, then prunes superseded state (old versions, their `/usr/src/cxadc-<ver>` trees, state for absent kernels, unowned `cxadc.ko*`). Both behaviors default on. The prune is gated on every bootable kernel already carrying the current version — never reorder it ahead of the install phase, or a fallback kernel loses its driver.
 - `deploy.yml` passes exactly three env vars to that script, in a fixed order, because `/etc/sudoers.d/cxadc-linux-deploy` matches the command line positionally. Adding, removing or reordering one breaks passwordless sudo on every rig. Set the `${VAR:-…}` fallbacks too: `workflow_run` deploys leave `inputs.*` empty, so the input defaults alone do not affect automatic deploys.
 

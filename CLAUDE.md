@@ -123,11 +123,13 @@ anywhere else — don't relocate object rules.
 
 ## Constraints that will bite you
 
-- **Version marker lives in three files and CI enforces agreement**: `dkms.conf`
+- **Version marker lives in four files and CI enforces agreement**: `dkms.conf`
   `PACKAGE_VERSION`, the `version N.N` string in the `src/kernel/cxadc.c` header
-  comment, and README's `Current DKMS package version: \`N.N\``. Both
-  `deploy.yml` and `src/scripts/deploy_dkms_install.sh` parse all three and abort
-  on mismatch. Bump all three together (currently `1.1`).
+  comment, README's `Current DKMS package version: \`N.N\``, and INSTALL.md's
+  `DKMS package version \`N.N\`` (plus its example commands). Both `deploy.yml`
+  and `src/scripts/deploy_dkms_install.sh` parse the markers and abort on
+  mismatch. Bump all four together, and the copy in
+  `.github/copilot-instructions.md` (currently `1.2`).
 - **`cxadc-status` must never open `/dev/cxadcN`** — it runs during live
   captures; sysfs/procfs/ALSA-read-only only.
 - **Never rename or repurpose sysfs parameters** under
