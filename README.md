@@ -521,7 +521,7 @@ mokutil --sb-state
 > [!NOTE]
 > If using **DKMS**, the driver automatically rebuilds on kernel update. Manual installs require reinstallation.
 
-Current DKMS package version: `1.1`
+Current DKMS package version: `1.2`
 
 **If driver stops loading after kernel update:**
 
@@ -672,6 +672,25 @@ journalctl -k -b -1 | grep -Ei "aer|cxadc"
 
 A card in this state is not recoverable in software — replace it. Common causes
 are power-rail damage from a miswired clockgen mod, or ESD.
+
+### Removing or Unbinding a Card
+
+Since `1.2` a card can be unbound while the module stays loaded — via
+`echo 1 > /sys/bus/pci/devices/<addr>/remove`, PCIe hot-remove, or a
+`dkms`-driven rebind — without leaving the driver holding freed memory:
+
+- If nothing has the device open, the node disappears immediately.
+- If a capture is running, the unbind **blocks until the reader closes**. The
+  reader receives whatever was already copied as a short read, then `EIO` on
+  the next `read()`; `cx-capture` reports the read error and exits `1`. Nothing
+  the driver owns is freed while a file is open.
+- After `echo 1 > /sys/bus/pci/rescan` the card returns as the **same**
+  `cxadcN` (minors are handed out lowest-free-first), so udev aliases keyed on
+  the node name keep working.
+- Opening a node that belongs to a removed card returns `ENXIO` (or `ENODEV`
+  during the brief unbind window).
+
+`modprobe -r cxadc` is unchanged: it refuses while any `/dev/cxadcN` is open.
 
 ### Cannot Read from Device
 

@@ -1,7 +1,7 @@
 ## Fedora DKMS Installation (cxadc)
 
 These instructions are specific to Fedora and the current repository layout
-(`src/kernel/` module source, DKMS package version `1.1`).
+(`src/kernel/` module source, DKMS package version `1.2`).
 
 ### 1) Prerequisites
 
@@ -62,7 +62,7 @@ already has the current version installed:
 > current version, and says which kernels blocked it.
 
 To do it by hand, repeat this for each version you previously installed
-(`0.1`, `0.5`, and `1.0`, which is what the fleet ran before `1.1`):
+(`0.1`, `0.5`, `1.0` and `1.1`, which is what the fleet ran before `1.2`):
 
 ```bash
 sudo dkms remove -m cxadc -v 0.1 --all || true
@@ -74,16 +74,16 @@ sudo rm -rf /usr/src/cxadc-0.1
 Copy this repository into DKMS source path:
 
 ```bash
-sudo mkdir -p /usr/src/cxadc-1.1
-sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.1/
+sudo mkdir -p /usr/src/cxadc-1.2
+sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.2/
 ```
 
 ### 5) Build and install with DKMS
 
 ```bash
-sudo dkms add -m cxadc -v 1.1
-sudo dkms build -m cxadc -v 1.1
-sudo dkms install -m cxadc -v 1.1
+sudo dkms add -m cxadc -v 1.2
+sudo dkms build -m cxadc -v 1.2
+sudo dkms install -m cxadc -v 1.2
 sudo depmod -a
 ```
 
@@ -113,7 +113,7 @@ lsmod | grep cxadc
 ls -l /dev/cxadc*
 ```
 
-Expected: `cxadc/1.1` shown by DKMS and at least `/dev/cxadc0` present when
+Expected: `cxadc/1.2` shown by DKMS and at least `/dev/cxadc0` present when
 supported hardware is installed.
 
 If you define host-specific udev aliases (for example `/dev/cx/vcr0-video`),
@@ -142,9 +142,9 @@ current version built for it automatically at kernel install/boot. To force a
 refresh manually:
 
 ```bash
-sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.1/
-sudo dkms build -m cxadc -v 1.1
-sudo dkms install -m cxadc -v 1.1 --force
+sudo rsync -a --delete --exclude '.git' --exclude 'build' ./ /usr/src/cxadc-1.2/
+sudo dkms build -m cxadc -v 1.2
+sudo dkms install -m cxadc -v 1.2 --force
 sudo depmod -a
 ```
 
@@ -157,8 +157,8 @@ same driver as the primary one. To back-fill by hand:
 ```bash
 for k in $(ls -1 /lib/modules); do
   [ -d "/lib/modules/$k/build" ] || { echo "skip $k (no kernel-devel)"; continue; }
-  sudo dkms build   -m cxadc -v 1.1 -k "$k"
-  sudo dkms install -m cxadc -v 1.1 -k "$k" --force
+  sudo dkms build   -m cxadc -v 1.2 -k "$k"
+  sudo dkms install -m cxadc -v 1.2 -k "$k" --force
 done
 sudo depmod -a
 ```
@@ -168,9 +168,9 @@ installed for every kernel it can boot:
 
 ```console
 $ dkms status -m cxadc
-cxadc/1.1, 7.1.9-200.fc44.x86_64,  x86_64: installed
-cxadc/1.1, 7.1.10-200.fc44.x86_64, x86_64: installed
-cxadc/1.1, 7.1.12-200.fc44.x86_64, x86_64: installed
+cxadc/1.2, 7.1.9-200.fc44.x86_64,  x86_64: installed
+cxadc/1.2, 7.1.10-200.fc44.x86_64, x86_64: installed
+cxadc/1.2, 7.1.12-200.fc44.x86_64, x86_64: installed
 ```
 
 ### 11) Uninstall
@@ -178,13 +178,13 @@ cxadc/1.1, 7.1.12-200.fc44.x86_64, x86_64: installed
 Remove DKMS module:
 
 ```bash
-sudo dkms remove -m cxadc -v 1.1 --all
+sudo dkms remove -m cxadc -v 1.2 --all
 ```
 
 Optional cleanup of staged source:
 
 ```bash
-sudo rm -rf /usr/src/cxadc-1.1
+sudo rm -rf /usr/src/cxadc-1.2
 ```
 
 ### Sudoers for CI/CD
