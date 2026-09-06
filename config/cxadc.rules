@@ -4,7 +4,9 @@
 # defined in separate udev rules; these permission rules still apply because
 # aliases resolve back to the underlying cxadc* character nodes.
 KERNEL=="cxadc*", SUBSYSTEM=="cxadc", MODE="0660", GROUP="video"
-SUBSYSTEM=="cxadc", KERNEL=="cxadc*", ACTION=="add|change", \
+# Skip inside the initramfs: dracut ships this file, but not coreutils, so the
+# RUN callouts fail there (and the real root will re-trigger the rule anyway).
+SUBSYSTEM=="cxadc", KERNEL=="cxadc*", ACTION=="add|change", TEST!="/etc/initrd-release", \
 	RUN+="/usr/bin/chgrp -R video /sys/class/cxadc/%k/device/parameters", \
 	RUN+="/usr/bin/chmod -R g+w /sys/class/cxadc/%k/device/parameters"
 
