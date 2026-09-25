@@ -34,3 +34,4 @@ built-in.a
 # Python
 __pycache__/
 *.pyc
+docs/cx25800.pdf
