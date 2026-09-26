@@ -33,6 +33,15 @@ concurrency:
 jobs:
   build:
     name: Build on ${{ matrix.host }}
+    # Fork PRs never reach these runners: they sit beside production env roots
+    # and credentials, and this job compiles a kernel module on the capture
+    # rigs. Pushes and PRs from branches of this repo still build. A fork PR
+    # runs its own copy of this file, so the guard only stops an approved,
+    # innocent-looking PR; reviewing workflow edits before approval is still
+    # the primary control.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:

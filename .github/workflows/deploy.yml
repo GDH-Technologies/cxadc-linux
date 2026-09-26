@@ -52,9 +52,18 @@ jobs:
   deploy:
     name: Deploy on ${{ matrix.host }}
     # workflow_run fires on *completion*, success or not -- gate on conclusion.
+    #
+    # It also fires for fork PR runs of "Build and Test", and the `branches`
+    # filter above matches the fork's head branch name, so a fork PR opened
+    # from its own `master` passes it. This job never runs fork code (it pulls
+    # origin/master into a fixed checkout), but a fork must not be able to
+    # start a deploy on all three rigs, so require the triggering run to come
+    # from this repository.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+      (github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success') &&
+      (github.event_name != 'workflow_run' ||
+      github.event.workflow_run.head_repository.full_name == github.repository)
     strategy:
       fail-fast: false
       matrix:
