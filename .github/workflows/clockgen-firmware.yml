@@ -19,6 +19,15 @@ jobs:
     # RP2040 firmware is host-independent, and wm is the only runner carrying
     # the ARM cross toolchain. Building it on the capture rigs would prove
     # nothing while competing with live captures.
+    #
+    # Fork PRs never reach this runner: wm sits beside production env roots
+    # and credentials. Pushes and PRs from branches of this repo still build.
+    # A fork PR runs its own copy of this file, so the guard only stops an
+    # approved, innocent-looking PR; reviewing workflow edits before approval
+    # is still the primary control.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on:
       - self-hosted
       - Linux
