@@ -187,69 +187,27 @@ Optional cleanup of staged source:
 sudo rm -rf /usr/src/cxadc-1.2
 ```
 
-### Sudoers for CI/CD
+### Deploying to the GDH rigs (no sudoers rule)
 
-Create a dedicated sudoers drop-in for the runner user (example user: `rdodge`).
-
-Edit with `visudo`:
-
-```bash
-sudo visudo -f /etc/sudoers.d/cxadc-linux-deploy
-```
-
-Use this content (update `rdodge` only if your runner user differs):
-
-```sudoers
-User_Alias CXADC_RUNNER = rdodge
-
-Cmnd_Alias CXADC_DEPLOY_INSTALL = /usr/bin/bash /home/rdodge/Repos/cxadc-linux/src/scripts/deploy_dkms_install.sh
-Cmnd_Alias CXADC_DEPLOY_INSTALL_ENV = /usr/bin/env DKMS_TARGET_KERNEL=* DKMS_INSTALL_ALL_KERNELS=* PRUNE_OLD_DKMS_VERSIONS=* /usr/bin/bash /home/rdodge/Repos/cxadc-linux/src/scripts/deploy_dkms_install.sh
-Cmnd_Alias CXADC_MODPROBE_REMOVE = /usr/sbin/modprobe -r cxadc
-Cmnd_Alias CXADC_MODPROBE_LOAD = /usr/sbin/modprobe cxadc
-
-CXADC_RUNNER ALL=(root) NOPASSWD: \
-	CXADC_DEPLOY_INSTALL, \
-	CXADC_DEPLOY_INSTALL_ENV, \
-	CXADC_MODPROBE_REMOVE, CXADC_MODPROBE_LOAD
-```
-
-Set secure file ownership and permissions:
+There is **no passwordless sudo for deploys**, by design. CI (`deploy.yml`) pulls and builds
+on each rig, then posts a "deploy pending" notice; the root install runs from wm with a
+YubiKey touch per host:
 
 ```bash
-sudo chown root:root /etc/sudoers.d/cxadc-linux-deploy
-sudo chmod 0440 /etc/sudoers.d/cxadc-linux-deploy
+src/scripts/deploy-root.sh                          # dry run
+src/scripts/deploy-root.sh --apply                  # cs0, cs1, wm
+src/scripts/deploy-root.sh --apply --hosts cs1      # one host; --reload, --force, --kernel …
 ```
 
-Quick verification for the runner user:
-
-```bash
-sudo -n -l | grep -E 'deploy_dkms_install\.sh|modprobe'
-```
-
-> [!IMPORTANT]
-> Use absolute paths exactly as shown. Sudoers command matching is strict; any
-> path mismatch (for example omitting `/home/rdodge/Repos/cxadc-linux/...`) will
-> cause `sudo: a password is required` in GitHub Actions.
+Remote hosts go through `ssh <host>-root` (an `ed25519-sk` root login; see
+`workflow-master/sudo-handshake/remote-root/`), wm through plain `sudo`. Each host is built as
+the user, installed as root in one connection, verified, and stamped
+(`~/.local/state/cxadc-deploy/deployed-sha`).
 
 > [!CAUTION]
-> `CXADC_DEPLOY_INSTALL_ENV` matches the command line **positionally**. It lists
-> exactly three variables — `DKMS_TARGET_KERNEL`, `DKMS_INSTALL_ALL_KERNELS`,
-> `PRUNE_OLD_DKMS_VERSIONS` — in that order, and `deploy.yml` passes exactly
-> those three, in that order. Adding a fourth variable to the `run_as_root env`
-> call, removing one, or reordering them stops matching this alias, and every
-> deploy on every rig falls back to a password prompt it cannot answer.
->
-> This is why `DKMS_PRUNE_DRY_RUN` is **not** passed through `deploy.yml`. The
-> script honours it, but only from a real root shell:
->
-> ```bash
-> sudo -i
-> DKMS_PRUNE_DRY_RUN=true bash /home/rdodge/Repos/cxadc-linux/src/scripts/deploy_dkms_install.sh
-> ```
->
-> If you ever do need a new variable in the CI path, update this sudoers file on
-> **cs0, cs1 and wm** first, then `deploy.yml` — never the other way round.
+> Do not bring back a NOPASSWD rule for `deploy_dkms_install.sh`. Until 2026-11-18 the rigs had
+> one (`/etc/sudoers.d/cxadc-linux-deploy`), and because the script lives in the runner
+> user's own checkout, any process running as that user -- any CI job included -- could edit it
+> and become root with no password. Its `env DKMS_*=*` wildcards also matched extra arguments
+> (sudo wildcards match spaces), e.g. `BASH_ENV=…`.
 
-```
-
-```

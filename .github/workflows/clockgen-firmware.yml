@@ -38,8 +38,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # Runners have passwordless sudo only for the deploy helper, so CI cannot
-      # install packages. Fail loudly with the fix instead of half-building.
+      # Runners have no passwordless sudo (the root deploy runs from wm with a
+      # YubiKey touch: src/scripts/deploy-root.sh), so CI cannot install packages. Fail loudly with the fix instead of half-building.
       - name: Verify toolchain
         shell: bash
         run: |
